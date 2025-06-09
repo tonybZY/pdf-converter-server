@@ -163,6 +163,68 @@ startxref
         print(f"Erreur conversion texte: {e}")
         return False
 
+def clean_document_content(raw_content):
+    """Nettoie le contenu du document pour un meilleur affichage"""
+    try:
+        # Si c'est du JSON, essayer de l'extraire intelligemment
+        if raw_content.strip().startswith('{'):
+            try:
+                data = json.loads(raw_content)
+                
+                # Extraire les champs texte courants
+                text_parts = []
+                
+                def extract_text_from_dict(obj, depth=0):
+                    if depth > 3:  # Éviter récursion infinie
+                        return
+                    
+                    if isinstance(obj, dict):
+                        for key, value in obj.items():
+                            if isinstance(value, str) and len(value) > 10 and key.lower() in ['text', 'content', 'body', 'description', 'title']:
+                                text_parts.append(f"{key.title()}: {value}")
+                            elif isinstance(value, (dict, list)):
+                                extract_text_from_dict(value, depth + 1)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            extract_text_from_dict(item, depth + 1)
+                
+                extract_text_from_dict(data)
+                
+                if text_parts:
+                    return "\n\n".join(text_parts)
+                else:
+                    # Si pas de texte extrait, formatter le JSON de façon lisible
+                    return json.dumps(data, indent=2, ensure_ascii=False)[:2000]
+                    
+            except json.JSONDecodeError:
+                pass
+        
+        # Nettoyage général du texte
+        content = raw_content
+        
+        # Remplacer les caractères de contrôle
+        content = content.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # Enlever les espaces excessifs
+        lines = []
+        for line in content.split('\n'):
+            cleaned_line = ' '.join(line.split())  # Normaliser les espaces
+            lines.append(cleaned_line)
+        
+        # Reconstruire avec espacement intelligent
+        result = []
+        for i, line in enumerate(lines):
+            if line.strip():  # Ligne non vide
+                result.append(line)
+            elif i > 0 and lines[i-1].strip():  # Ligne vide après du contenu
+                result.append("")  # Garder une seule ligne vide
+        
+        return '\n'.join(result)
+        
+    except Exception as e:
+        print(f"Erreur nettoyage contenu: {e}")
+        return raw_content[:2000]  # Fallback
+
 def create_placeholder_image(output_path, text, format='png'):
     """Crée une image placeholder simple"""
     if PIL_AVAILABLE:
@@ -202,54 +264,73 @@ def create_placeholder_image(output_path, text, format='png'):
         return False
 
 def create_document_image_advanced(text_content, output_path, doc_type, target_format='png'):
-    """Création d'image avancée pour documents"""
+    """Création d'image avancée pour documents - VERSION AMÉLIORÉE"""
     if not PIL_AVAILABLE:
         return create_placeholder_image(output_path, f"{doc_type}\nPIL non disponible", target_format)
     
     try:
-        width, height = 1200, 1600
+        # Image plus grande pour meilleure lisibilité
+        width, height = 1400, 1800
         img = Image.new('RGB', (width, height), color='white')
         draw = ImageDraw.Draw(img)
         
-        header_color = '#4285f4'
-        text_color = '#333333'
-        border_color = '#e0e0e0'
+        # Couleurs améliorées
+        header_color = '#4285f4'  # Bleu Google
+        text_color = '#2c3e50'    # Gris foncé pour meilleure lisibilité
+        border_color = '#bdc3c7'  # Gris clair
+        highlight_color = '#fff3cd'  # Jaune pour surlignage
         
+        # Polices plus grandes
         try:
-            title_font = ImageFont.truetype("arial.ttf", 28)
-            subtitle_font = ImageFont.truetype("arial.ttf", 16)
-            content_font = ImageFont.truetype("arial.ttf", 14)
+            title_font = ImageFont.truetype("arial.ttf", 32)      # Plus grand
+            subtitle_font = ImageFont.truetype("arial.ttf", 18)   # Plus grand
+            content_font = ImageFont.truetype("arial.ttf", 16)    # Plus grand
+            small_font = ImageFont.truetype("arial.ttf", 14)      # Pour les détails
         except:
             title_font = ImageFont.load_default()
             subtitle_font = ImageFont.load_default()
             content_font = ImageFont.load_default()
+            small_font = ImageFont.load_default()
         
-        # Header avec couleur
-        draw.rectangle([(0, 0), (width, 80)], fill=header_color)
-        draw.text((40, 25), f"📄 {doc_type}", fill='white', font=title_font)
+        # Header avec icône et titre
+        draw.rectangle([(0, 0), (width, 90)], fill=header_color)
+        draw.text((50, 30), f"📄 {doc_type}", fill='white', font=title_font)
         
-        # Date et infos
-        date_str = datetime.now().strftime("%d/%m/%Y %H:%M")
-        draw.text((40, 100), f"Converti le {date_str}", fill='gray', font=subtitle_font)
+        # Sous-header avec infos
+        date_str = datetime.now().strftime("%d/%m/%Y à %H:%M")
+        draw.rectangle([(0, 90), (width, 130)], fill='#f8f9fa')
+        draw.text((50, 100), f"Converti le {date_str} | Convertisseur PDF/Image", fill='#6c757d', font=small_font)
         
-        # Bordure du contenu
-        draw.rectangle([(30, 140), (width-30, height-30)], outline=border_color, width=2)
+        # Bordure principale
+        draw.rectangle([(40, 150), (width-40, height-40)], outline=border_color, width=3)
         
-        # Contenu du document
-        y_position = 160
-        line_height = 18
-        max_chars_per_line = 90
+        # Nettoyage et préparation du contenu
+        y_position = 180
+        line_height = 22  # Plus d'espace entre lignes
+        max_chars_per_line = 85  # Moins de caractères par ligne
+        left_margin = 60
         
-        lines = text_content.replace('\r', '').split('\n')
+        # Nettoyer le contenu (enlever le JSON si présent)
+        cleaned_content = clean_document_content(text_content)
+        
+        # Diviser en lignes et traiter
+        lines = cleaned_content.replace('\r', '').split('\n')
         processed_lines = []
         
         for line in lines:
+            line = line.strip()
+            if not line:  # Ligne vide
+                processed_lines.append("")
+                continue
+                
+            # Diviser les lignes trop longues intelligemment
             if len(line) > max_chars_per_line:
                 words = line.split(' ')
                 current_line = ""
                 for word in words:
-                    if len(current_line + word) < max_chars_per_line:
-                        current_line += word + " "
+                    test_line = current_line + word + " "
+                    if len(test_line) <= max_chars_per_line:
+                        current_line = test_line
                     else:
                         if current_line:
                             processed_lines.append(current_line.strip())
@@ -259,23 +340,57 @@ def create_document_image_advanced(text_content, output_path, doc_type, target_f
             else:
                 processed_lines.append(line)
         
-        # Afficher les lignes
-        for i, line in enumerate(processed_lines[:70]):
-            if y_position > height - 80:
-                draw.text((50, y_position), "... (contenu tronqué)", fill='gray', font=content_font)
+        # Affichage des lignes avec mise en forme
+        for i, line in enumerate(processed_lines[:65]):  # Limiter à 65 lignes
+            if y_position > height - 100:
+                # Indication de contenu tronqué
+                draw.rectangle([(left_margin, y_position), (width-60, y_position+20)], fill='#e9ecef')
+                draw.text((left_margin + 10, y_position), "... (contenu tronqué - document plus long)", fill='#6c757d', font=small_font)
                 break
             
-            if any(keyword in line.lower() for keyword in ['title', 'titre', 'important', 'header']):
-                draw.rectangle([(50, y_position-2), (width-50, y_position+16)], fill='#fff3cd')
+            if not line:  # Ligne vide = espace
+                y_position += line_height // 2
+                continue
             
-            draw.text((50, y_position), line, fill=text_color, font=content_font)
+            # Détecter et surligner les titres/éléments importants
+            is_important = False
+            if any(keyword in line.lower() for keyword in ['title', 'titre', 'important', 'header', '===', '***']):
+                is_important = True
+            
+            # Détecter les listes (commencent par -, *, •, numéros)
+            is_list_item = line.strip().startswith(('-', '*', '•')) or (len(line) > 0 and line[0].isdigit() and '.' in line[:5])
+            
+            # Surlignage pour éléments importants
+            if is_important:
+                draw.rectangle([(left_margin-5, y_position-2), (width-60, y_position+18)], fill=highlight_color)
+            
+            # Indentation pour listes
+            x_position = left_margin + (20 if is_list_item else 0)
+            
+            # Couleur du texte selon le type
+            text_color_final = '#1a73e8' if is_important else text_color
+            
+            # Affichage du texte
+            draw.text((x_position, y_position), line, fill=text_color_final, font=content_font)
             y_position += line_height
         
-        # Footer
-        draw.text((40, height-50), f"Généré par Convertisseur PDF/Image", fill='gray', font=subtitle_font)
+        # Footer avec statistiques
+        footer_y = height - 60
+        draw.rectangle([(0, footer_y), (width, height)], fill='#f8f9fa')
         
-        img.save(output_path, format=target_format.upper(), quality=95)
-        return True, f"Document {doc_type} converti en image {target_format.upper()} avec rendu avancé"
+        # Statistiques du document
+        total_chars = len(text_content)
+        total_lines = len(lines)
+        draw.text((50, footer_y + 20), f"Document: {total_lines} lignes | {total_chars} caractères | Format: {target_format.upper()}", 
+                 fill='#6c757d', font=small_font)
+        
+        # Logo/signature à droite
+        draw.text((width-300, footer_y + 20), "Généré par Convertisseur PDF/Image", 
+                 fill='#6c757d', font=small_font)
+        
+        # Sauvegarder avec qualité élevée
+        img.save(output_path, format=target_format.upper(), quality=95, optimize=True)
+        return True, f"Document {doc_type} converti en image {target_format.upper()} avec mise en forme avancée"
         
     except Exception as e:
         print(f"Erreur création image avancée: {e}")
@@ -289,17 +404,8 @@ def convert_gdoc_to_image(input_path, output_path, target_format='png'):
         
         print(f"Contenu GDOC: {content[:200]}...")
         
-        if content.startswith('{"'):
-            try:
-                data = json.loads(content)
-                text_content = str(data)
-            except:
-                text_content = content
-        else:
-            text_content = content
-        
         if PIL_AVAILABLE:
-            return create_document_image_advanced(text_content, output_path, "Google Doc", target_format)
+            return create_document_image_advanced(content, output_path, "Google Doc", target_format)
         else:
             return create_placeholder_image(output_path, "GDOC\nPIL non disponible", target_format), True
             
@@ -538,7 +644,7 @@ def home():
     """Page d'accueil avec informations sur l'API"""
     return jsonify({
         "service": "Convertisseur PDF/Image Sécurisé",
-        "version": "2.5-enhanced-fixed",
+        "version": "2.6-enhanced-final",
         "description": "API de conversion de fichiers vers PDF ou Image avec authentification",
         "endpoints": {
             "health": "/health",
@@ -568,7 +674,7 @@ def home():
 def health():
     return jsonify({
         "status": "OK",
-        "version": "2.5-enhanced-fixed",
+        "version": "2.6-enhanced-final",
         "features": ["API Key Security", "Public Downloads", "PDF Conversion", "Image Conversion", "URL Conversion"],
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "total_supported_formats": len(ALLOWED_EXTENSIONS),
@@ -931,7 +1037,7 @@ def metrics():
         
         return jsonify({
             "status": "active",
-            "version": "2.5-enhanced-fixed",
+            "version": "2.6-enhanced-final",
             "timestamp": datetime.now().isoformat(),
             "files": {
                 "uploaded_count": uploaded_files,
@@ -985,14 +1091,16 @@ def supported_formats():
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "description": "Convertisseur de fichiers sécurisé vers PDF et Image - Support étendu",
         "security": "Clé API requise pour upload, téléchargements publics",
-        "version": "2.5-enhanced-fixed",
+        "version": "2.6-enhanced-final",
         "new_features": [
             "Conversion d'URL vers image pour n8n",
             "Support PIL/Pillow pour vraies conversions d'images",
             "PyMuPDF pour conversion PDF vers image",
             "Conversion texte vers image avec rendu",
             "Feature flags pour déploiement progressif",
-            "Gestion améliorée des fichiers GDOC"
+            "Gestion améliorée des fichiers GDOC avec nettoyage JSON",
+            "Mise en forme avancée avec polices plus grandes et espacement",
+            "Surlignage intelligent des titres et listes"
         ]
     })
 
@@ -1006,7 +1114,7 @@ def status():
         
         return jsonify({
             "status": "Active",
-            "version": "2.5-enhanced-fixed",
+            "version": "2.6-enhanced-final",
             "files_in_upload": uploaded_files,
             "files_converted": converted_files,
             "supported_formats_count": len(ALLOWED_EXTENSIONS),
@@ -1034,7 +1142,7 @@ if __name__ == "__main__":
         print("⚠️  ATTENTION: Utilisez une vraie clé API en production!")
         print("   Définissez la variable d'environnement PDF_API_KEY")
     
-    print(f"🚀 Serveur PDF/Image Enhanced v2.5-fixed démarré sur le port {port}")
+    print(f"🚀 Serveur PDF/Image Enhanced v2.6-final démarré sur le port {port}")
     print(f"🔑 Clé API requise pour uploads: {'***' + API_KEY[-4:] if len(API_KEY) > 4 else '****'}")
     print(f"📁 Formats supportés: {len(ALLOWED_EXTENSIONS)} types de fichiers")
     print(f"🌍 Téléchargements publics: /public/download/<filename>")
@@ -1052,5 +1160,11 @@ if __name__ == "__main__":
     print(f"   - POST /convert-url-to-image (URL pour n8n)")
     print(f"   - GET /test-pil (test PIL)")
     print(f"   - GET /metrics (monitoring)")
+    print(f"🎨 Améliorations v2.6:")
+    print(f"   - Polices plus grandes (16px → 32px pour titres)")
+    print(f"   - Espacement amélioré (22px entre lignes)")
+    print(f"   - Nettoyage intelligent du JSON GDOC")
+    print(f"   - Surlignage des titres et listes")
+    print(f"   - Footer avec statistiques du document")
     
     app.run(host='0.0.0.0', port=port, debug=False)
