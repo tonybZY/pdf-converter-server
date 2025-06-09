@@ -325,9 +325,9 @@ def convert():
         if not conversion_success:
             return jsonify({"error": f"Échec de la conversion: {conversion_message}"}), 500
         
-        # Construire l'URL de téléchargement (SANS la clé API pour la sécurité)
+        # Construire l'URL de téléchargement avec clé API en paramètre pour faciliter les tests
         base_url = request.host_url.rstrip('/')
-        download_url = f"{base_url}/download/{converted_filename}"
+        download_url = f"{base_url}/download/{converted_filename}?api_key={API_KEY}"
         
         processing_time = round(time.time() - start_time, 3)
         
@@ -345,7 +345,7 @@ def convert():
             "conversion_method": conversion_message,
             "message": f"Fichier {file_extension.upper()} traité avec succès!",
             "format_category": get_format_category(file_extension),
-            "security_note": "Clé API requise pour télécharger"
+            "security_note": "URL inclut la clé API pour faciliter les tests - Masquez l'URL en production"
         })
         
     except Exception as e:
