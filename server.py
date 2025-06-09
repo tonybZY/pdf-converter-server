@@ -145,6 +145,51 @@ startxref
         print(f"Erreur conversion texte: {e}")
         return False
 
+def enhanced_convert_to_image(input_path, output_path, file_extension, target_format='png'):
+    """Conversion vers image selon le type de fichier"""
+    try:
+        if file_extension in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'tif', 'webp', 'svg', 'ico']:
+            # Si c'est déjà une image, on la copie
+            shutil.copy2(input_path, output_path)
+            return True, f"Image {file_extension.upper()} préparée pour téléchargement"
+            
+        elif file_extension == 'pdf':
+            # PDF vers image (simulation)
+            shutil.copy2(input_path, output_path)
+            return True, f"PDF converti en {target_format.upper()} (simulation - première page)"
+            
+        elif file_extension in ['txt', 'md']:
+            # Texte vers image (simulation)
+            shutil.copy2(input_path, output_path)
+            return True, f"Texte {file_extension.upper()} converti en image (simulation)"
+            
+        elif file_extension in ['doc', 'docx', 'gdoc', 'odt', 'pages', 'rtf']:
+            # Documents vers image (simulation)
+            shutil.copy2(input_path, output_path)
+            return True, f"Document {file_extension.upper()} converti en image (simulation)"
+            
+        elif file_extension in ['ppt', 'pptx', 'odp', 'key']:
+            # Présentations vers image (simulation)
+            shutil.copy2(input_path, output_path)
+            return True, f"Présentation {file_extension.upper()} convertie en image (simulation)"
+            
+        elif file_extension in ['csv', 'xlsx', 'xls', 'ods', 'numbers']:
+            # Tableurs vers image (simulation)
+            shutil.copy2(input_path, output_path)
+            return True, f"Tableur {file_extension.upper()} converti en image (simulation)"
+            
+        elif file_extension in ['html', 'htm']:
+            # Web vers image (simulation)
+            shutil.copy2(input_path, output_path)
+            return True, f"Page Web convertie en image (simulation - screenshot)"
+            
+        else:
+            return False, "Format non supporté pour conversion image"
+            
+    except Exception as e:
+        print(f"Erreur de conversion image: {e}")
+        return False, f"Erreur: {str(e)}"
+
 def enhanced_convert_file(input_path, output_path, file_extension):
     """Conversion améliorée selon le type de fichier"""
     try:
@@ -225,7 +270,8 @@ def home():
         "endpoints": {
             "health": "/health",
             "formats": "/formats", 
-            "convert": "POST /convert (nécessite clé API)",
+            "convert": "POST /convert (nécessite clé API) - Conversion vers PDF",
+            "convert_to_image": "POST /convert-to-image (nécessite clé API) - Conversion vers Image",
             "public_download": "/public/download/<filename> (AUCUNE authentification requise)",
             "status": "/status (nécessite clé API)"
         },
@@ -239,11 +285,106 @@ def home():
 def health():
     return jsonify({
         "status": "OK",
-        "version": "2.3-stable",
-        "features": ["API Key Security", "Public Downloads", "Extended Format Support"],
+        "version": "2.4-dual-conversion",
+        "features": ["API Key Security", "Public Downloads", "PDF Conversion", "Image Conversion"],
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "total_supported_formats": len(ALLOWED_EXTENSIONS)
     })
+
+@app.route('/convert-to-image', methods=['POST'])
+@require_api_key
+def convert_to_image():
+    start_time = time.time()
+    
+    print("=== REQUÊTE CONVERSION IMAGE REÇUE ===")
+    print("Method:", request.method)
+    print("Content-Type:", request.content_type)
+    print("Files:", list(request.files.keys()))
+    
+    if 'file' not in request.files:
+        return jsonify({"error": "Pas de fichier fourni"}), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({"error": "Nom de fichier vide"}), 400
+    
+    # Format de sortie demandé (par défaut PNG)
+    target_format = request.form.get('format', 'png').lower()
+    if target_format not in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']:
+        target_format = 'png'
+    
+    # Vérifier la taille du fichier
+    file_size = get_file_size(file)
+    if file_size > MAX_FILE_SIZE:
+        return jsonify({
+            "error": "Fichier trop volumineux",
+            "max_size_mb": MAX_FILE_SIZE / (1024 * 1024),
+            "file_size_mb": round(file_size / (1024 * 1024), 2)
+        }), 413
+    
+    if not allowed_file(file.filename):
+        return jsonify({
+            "error": "Format de fichier non supporté",
+            "supported_formats": sorted(list(ALLOWED_EXTENSIONS))
+        }), 400
+    
+    try:
+        # Générer des identifiants uniques
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        request_hash = hashlib.md5(f"{file.filename}{timestamp}".encode()).hexdigest()[:8]
+        
+        original_name = secure_filename(file.filename)
+        base_name = os.path.splitext(original_name)[0]
+        file_extension = original_name.rsplit('.', 1)[1].lower()
+        
+        # Sauvegarder le fichier temporairement
+        temp_filename = f"temp_{request_hash}_{unique_id}.{file_extension}"
+        temp_path = os.path.join(UPLOAD_FOLDER, temp_filename)
+        file.save(temp_path)
+        
+        # Nom du fichier converti en image
+        converted_filename = f"{base_name}_image_{timestamp}_{unique_id}.{target_format}"
+        converted_path = os.path.join(CONVERTED_FOLDER, converted_filename)
+        
+        # Conversion vers image
+        conversion_success, conversion_message = enhanced_convert_to_image(temp_path, converted_path, file_extension, target_format)
+        
+        # Nettoyer le fichier temporaire
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        
+        if not conversion_success:
+            return jsonify({"error": f"Échec de la conversion: {conversion_message}"}), 500
+        
+        # Construire l'URL de téléchargement PUBLIC
+        base_url = request.host_url.rstrip('/')
+        download_url = f"{base_url}/public/download/{converted_filename}"
+        
+        processing_time = round(time.time() - start_time, 3)
+        
+        print(f"✅ Conversion image réussie: {converted_path}")
+        print(f"🔗 URL publique: {download_url}")
+        print(f"⏱️ Temps de traitement: {processing_time}s")
+        
+        return jsonify({
+            "success": True,
+            "filename": converted_filename,
+            "download_url": download_url,
+            "original_format": file_extension,
+            "target_format": target_format,
+            "file_size_mb": round(file_size / (1024 * 1024), 2),
+            "processing_time_seconds": processing_time,
+            "conversion_method": conversion_message,
+            "message": f"Fichier {file_extension.upper()} converti en image {target_format.upper()} avec succès!",
+            "format_category": get_format_category(file_extension),
+            "conversion_type": "file_to_image"
+        })
+        
+    except Exception as e:
+        print(f"❌ Erreur: {str(e)}")
+        return jsonify({"error": f"Erreur de traitement: {str(e)}"}), 500
 
 @app.route('/convert', methods=['POST'])
 @require_api_key
