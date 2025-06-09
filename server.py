@@ -145,55 +145,7 @@ startxref
         print(f"Erreur conversion texte: {e}")
         return False
 
-def enhanced_convert_to_image(input_path, output_path, file_extension, target_format='png'):
-    """Conversion vers image selon le type de fichier"""
-    try:
-        if file_extension in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'tif', 'webp', 'svg', 'ico']:
-            # Si c'est déjà une image, on la copie (ou on peut la convertir au format cible)
-            if file_extension == target_format:
-                shutil.copy2(input_path, output_path)
-                return True, f"Image {file_extension.upper()} copiée"
-            else:
-                # Conversion d'un format image à un autre (simulation)
-                shutil.copy2(input_path, output_path)
-                return True, f"Image {file_extension.upper()} convertie en {target_format.upper()} (simulation)"
-            
-        elif file_extension == 'pdf':
-            # PDF vers image (simulation - nécessiterait pdf2image en réalité)
-            shutil.copy2(input_path, output_path)
-            return True, f"PDF converti en {target_format.upper()} (simulation - première page)"
-            
-        elif file_extension in ['txt', 'md']:
-            # Texte vers image (simulation - créer une image avec le texte)
-            shutil.copy2(input_path, output_path)
-            return True, f"Texte {file_extension.upper()} converti en image (simulation)"
-            
-        elif file_extension in ['doc', 'docx', 'gdoc', 'odt', 'pages', 'rtf']:
-            # Documents vers image (simulation)
-            shutil.copy2(input_path, output_path)
-            return True, f"Document {file_extension.upper()} converti en image (simulation - première page)"
-            
-        elif file_extension in ['ppt', 'pptx', 'odp', 'key']:
-            # Présentations vers image (simulation)
-            shutil.copy2(input_path, output_path)
-            return True, f"Présentation {file_extension.upper()} convertie en image (simulation - première slide)"
-            
-        elif file_extension in ['csv', 'xlsx', 'xls', 'ods', 'numbers']:
-            # Tableurs vers image (simulation)
-            shutil.copy2(input_path, output_path)
-            return True, f"Tableur {file_extension.upper()} converti en image (simulation)"
-            
-        elif file_extension in ['html', 'htm']:
-            # Web vers image (simulation - screenshot)
-            shutil.copy2(input_path, output_path)
-            return True, f"Page Web convertie en image (simulation - screenshot)"
-            
-        else:
-            return False, "Format non supporté pour conversion image"
-            
-    except Exception as e:
-        print(f"Erreur de conversion image: {e}")
-        return False, f"Erreur: {str(e)}"
+def enhanced_convert_file(input_path, output_path, file_extension):
     """Conversion améliorée selon le type de fichier"""
     try:
         if file_extension == 'pdf':
@@ -273,8 +225,7 @@ def home():
         "endpoints": {
             "health": "/health",
             "formats": "/formats", 
-            "convert": "POST /convert (nécessite clé API) - Conversion vers PDF",
-            "convert_to_image": "POST /convert-to-image (nécessite clé API) - Conversion vers Image",
+            "convert": "POST /convert (nécessite clé API)",
             "public_download": "/public/download/<filename> (AUCUNE authentification requise)",
             "status": "/status (nécessite clé API)"
         },
@@ -288,8 +239,8 @@ def home():
 def health():
     return jsonify({
         "status": "OK",
-        "version": "2.4-dual-conversion",
-        "features": ["API Key Security", "Public Downloads", "PDF Conversion", "Image Conversion"],
+        "version": "2.3-stable",
+        "features": ["API Key Security", "Public Downloads", "Extended Format Support"],
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "total_supported_formats": len(ALLOWED_EXTENSIONS)
     })
