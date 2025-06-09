@@ -235,8 +235,8 @@ def enhanced_convert_file(input_path, output_path, file_extension):
 def health():
     return jsonify({
         "status": "OK",
-        "version": "2.1",
-        "features": ["API Key Security", "Enhanced Conversion", "File Size Limits", "Extended Format Support"],
+        "version": "2.1-secure",
+        "features": ["API Key Security", "Enhanced Conversion", "File Size Limits", "Extended Format Support", "Secure URLs"],
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "total_supported_formats": len(ALLOWED_EXTENSIONS)
     })
@@ -305,9 +305,9 @@ def convert():
         if not conversion_success:
             return jsonify({"error": f"Échec de la conversion: {conversion_message}"}), 500
         
-        # Construire l'URL de téléchargement
+        # Construire l'URL de téléchargement (SANS la clé API pour la sécurité)
         base_url = request.host_url.rstrip('/')
-        download_url = f"{base_url}/download/{converted_filename}?api_key={API_KEY}"
+        download_url = f"{base_url}/download/{converted_filename}"
         
         processing_time = round(time.time() - start_time, 3)
         
@@ -324,7 +324,8 @@ def convert():
             "processing_time_seconds": processing_time,
             "conversion_method": conversion_message,
             "message": f"Fichier {file_extension.upper()} traité avec succès!",
-            "format_category": get_format_category(file_extension)
+            "format_category": get_format_category(file_extension),
+            "security_note": "Clé API requise pour télécharger"
         })
         
     except Exception as e:
@@ -374,8 +375,8 @@ def supported_formats():
         "total_formats": len(ALLOWED_EXTENSIONS),
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "description": "Convertisseur de fichiers sécurisé vers PDF - Support étendu",
-        "security": "Nécessite une clé API",
-        "version": "2.1",
+        "security": "Nécessite une clé API pour upload ET téléchargement",
+        "version": "2.1-secure",
         "examples": {
             "google_docs": "gdoc",
             "microsoft_office": "doc, docx, ppt, pptx, xlsx",
@@ -396,14 +397,15 @@ def status():
         
         return jsonify({
             "status": "Active",
-            "version": "2.1",
+            "version": "2.1-secure",
             "files_in_upload": uploaded_files,
             "files_converted": converted_files,
             "supported_formats_count": len(ALLOWED_EXTENSIONS),
             "uptime": "Depuis le dernier déploiement",
-            "security": "Clé API active",
+            "security": "Clé API active - URLs sécurisées",
             "features": {
                 "api_security": True,
+                "secure_urls": True,
                 "file_size_limits": True,
                 "extended_format_support": True,
                 "format_categorization": True
@@ -421,9 +423,10 @@ if __name__ == "__main__":
         print("⚠️  ATTENTION: Utilisez une vraie clé API en production!")
         print("   Définissez la variable d'environnement PDF_API_KEY")
     
-    print(f"🚀 Serveur PDF sécurisé v2.1 démarré sur le port {port}")
+    print(f"🚀 Serveur PDF sécurisé v2.1-secure démarré sur le port {port}")
     print(f"🔑 Clé API requise: {'***' + API_KEY[-4:] if len(API_KEY) > 4 else '****'}")
     print(f"📁 Formats supportés: {len(ALLOWED_EXTENSIONS)} types de fichiers")
     print(f"📋 Catégories: Documents, Images, Tableurs, Présentations, Web, eBooks")
+    print(f"🛡️ URLs sécurisées: Clé API JAMAIS dans l'URL")
     
     app.run(host='0.0.0.0', port=port, debug=False)
