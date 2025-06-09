@@ -1,4 +1,4 @@
-# Formats supportés - ÉTENDUfrom flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import os
 import uuid
@@ -7,8 +7,7 @@ from werkzeug.utils import secure_filename
 import shutil
 from functools import wraps
 import hashlib
-import threading
-import time as time_module
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -23,42 +22,7 @@ MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB max
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CONVERTED_FOLDER, exist_ok=True)
 
-# Stockage temporaire des tokens de téléchargement
-download_tokens = {}
-token_lock = threading.Lock()
-
-def generate_download_token(filename):
-    """Génère un token temporaire pour le téléchargement"""
-    token = str(uuid.uuid4())
-    expiry = time.time() + 3600  # Expire dans 1 heure
-    
-    with token_lock:
-        download_tokens[token] = {
-            'filename': filename,
-            'expires_at': expiry
-        }
-        
-        # Nettoyer les tokens expirés
-        current_time = time.time()
-        expired_tokens = [t for t, data in download_tokens.items() 
-                         if data['expires_at'] < current_time]
-        for expired in expired_tokens:
-            del download_tokens[expired]
-    
-    return token
-
-def validate_download_token(token):
-    """Valide et retourne le nom de fichier pour un token"""
-    with token_lock:
-        if token not in download_tokens:
-            return None
-        
-        data = download_tokens[token]
-        if data['expires_at'] < time.time():
-            del download_tokens[token]
-            return None
-        
-        return data['filename']
+# Formats supportés - ÉTENDU
 ALLOWED_EXTENSIONS = {
     # Documents PDF et texte
     'pdf', 'txt', 'rtf',
@@ -116,8 +80,7 @@ def convert_text_to_pdf(input_path, output_path):
         with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
         
-        # Simulation de conversion PDF (pour l'instant on écrit le texte dans un fichier)
-        # Dans une vraie implementation, on utiliserait reportlab
+        # Simulation de conversion PDF
         pdf_content = f"""
 %PDF-1.4
 1 0 obj
@@ -186,77 +149,62 @@ def enhanced_convert_file(input_path, output_path, file_extension):
     """Conversion améliorée selon le type de fichier"""
     try:
         if file_extension == 'pdf':
-            # Si c'est déjà un PDF, on le copie
             shutil.copy2(input_path, output_path)
             return True, "PDF copié"
             
         elif file_extension in ['txt', 'md']:
-            # Conversion texte/markdown vers PDF
             success = convert_text_to_pdf(input_path, output_path)
             return success, f"Texte {file_extension.upper()} converti en PDF" if success else "Échec conversion texte"
             
         elif file_extension in ['png', 'jpg', 'jpeg', 'gif', 'bmp']:
-            # Images standards
             shutil.copy2(input_path, output_path)
             return True, f"Image {file_extension.upper()} préparée (conversion PDF en développement)"
             
         elif file_extension in ['tiff', 'tif', 'webp', 'svg', 'ico']:
-            # Images avancées
             shutil.copy2(input_path, output_path)
             return True, f"Image {file_extension.upper()} préparée (conversion PDF en développement)"
             
         elif file_extension in ['csv', 'xlsx', 'xls']:
-            # Tableurs Microsoft
             shutil.copy2(input_path, output_path)
             return True, f"Tableur {file_extension.upper()} préparé (conversion PDF en développement)"
             
         elif file_extension in ['ods', 'numbers']:
-            # Tableurs autres (LibreOffice, Apple)
             shutil.copy2(input_path, output_path)
             return True, f"Tableur {file_extension.upper()} préparé (conversion PDF en développement)"
             
         elif file_extension in ['doc', 'docx']:
-            # Documents Microsoft Word
             shutil.copy2(input_path, output_path)
             return True, f"Document Word {file_extension.upper()} préparé (conversion PDF en développement)"
             
         elif file_extension in ['gdoc', 'odt']:
-            # Documents Google/LibreOffice
             shutil.copy2(input_path, output_path)
             return True, f"Document {file_extension.upper()} préparé (conversion PDF en développement)"
             
         elif file_extension in ['pages']:
-            # Documents Apple Pages
             shutil.copy2(input_path, output_path)
             return True, "Document Apple Pages préparé (conversion PDF en développement)"
             
         elif file_extension in ['rtf']:
-            # Rich Text Format
             shutil.copy2(input_path, output_path)
             return True, "Document RTF préparé (conversion PDF en développement)"
             
         elif file_extension in ['ppt', 'pptx']:
-            # Présentations Microsoft PowerPoint
             shutil.copy2(input_path, output_path)
             return True, f"Présentation PowerPoint {file_extension.upper()} préparée (conversion PDF en développement)"
             
         elif file_extension in ['odp']:
-            # Présentations LibreOffice
             shutil.copy2(input_path, output_path)
             return True, "Présentation LibreOffice préparée (conversion PDF en développement)"
             
         elif file_extension in ['key']:
-            # Présentations Apple Keynote
             shutil.copy2(input_path, output_path)
             return True, "Présentation Apple Keynote préparée (conversion PDF en développement)"
             
         elif file_extension in ['html', 'htm']:
-            # Pages web
             shutil.copy2(input_path, output_path)
             return True, f"Page Web {file_extension.upper()} préparée (conversion PDF en développement)"
             
         elif file_extension in ['epub']:
-            # eBooks
             shutil.copy2(input_path, output_path)
             return True, "eBook EPUB préparé (conversion PDF en développement)"
             
@@ -272,17 +220,16 @@ def home():
     """Page d'accueil avec informations sur l'API"""
     return jsonify({
         "service": "Convertisseur PDF Sécurisé",
-        "version": "2.2-public-download",
+        "version": "2.3-stable",
         "description": "API de conversion de fichiers vers PDF avec authentification",
         "endpoints": {
             "health": "/health",
             "formats": "/formats", 
             "convert": "POST /convert (nécessite clé API)",
-            "public_download": "/public/download/<filename> (AUCUNE authentification)",
-            "download": "/download/<filename> (nécessite clé API)",
+            "public_download": "/public/download/<filename> (AUCUNE authentification requise)",
             "status": "/status (nécessite clé API)"
         },
-        "authentication": "Clé API requise via header 'X-API-Key'",
+        "authentication": "Clé API requise via header 'X-API-Key' pour les uploads uniquement",
         "supported_formats": len(ALLOWED_EXTENSIONS),
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "documentation": "Voir /formats pour la liste complète des formats"
@@ -292,8 +239,8 @@ def home():
 def health():
     return jsonify({
         "status": "OK",
-        "version": "2.1-secure",
-        "features": ["API Key Security", "Enhanced Conversion", "File Size Limits", "Extended Format Support", "Secure URLs"],
+        "version": "2.3-stable",
+        "features": ["API Key Security", "Public Downloads", "Extended Format Support"],
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "total_supported_formats": len(ALLOWED_EXTENSIONS)
     })
@@ -369,7 +316,7 @@ def convert():
         processing_time = round(time.time() - start_time, 3)
         
         print(f"✅ Conversion réussie: {converted_path}")
-        print(f"🔗 URL sécurisée: {download_url}")
+        print(f"🔗 URL publique: {download_url}")
         print(f"⏱️ Temps de traitement: {processing_time}s")
         
         return jsonify({
@@ -413,29 +360,6 @@ def public_download(filename):
     except FileNotFoundError:
         return jsonify({"error": "Fichier non trouvé"}), 404
 
-@app.route('/download/<token>')
-def download_file(token):
-    """Route sécurisée pour télécharger les fichiers avec token temporaire"""
-    try:
-        # Vérifier si c'est un token ou un nom de fichier direct (rétrocompatibilité)
-        if len(token) == 36 and '-' in token:  # Format UUID
-            filename = validate_download_token(token)
-            if not filename:
-                return jsonify({"error": "Token invalide ou expiré"}), 404
-        else:
-            # Mode legacy avec clé API requise
-            api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
-            if not api_key or api_key != API_KEY:
-                return jsonify({
-                    "error": "Clé API manquante ou invalide",
-                    "message": "Utilisez le header 'X-API-Key' ou le paramètre 'api_key'"
-                }), 401
-            filename = token
-        
-        return send_from_directory(CONVERTED_FOLDER, filename, as_attachment=True)
-    except FileNotFoundError:
-        return jsonify({"error": "Fichier non trouvé"}), 404
-
 @app.route('/formats')
 def supported_formats():
     """Liste détaillée des formats supportés"""
@@ -454,16 +378,8 @@ def supported_formats():
         "total_formats": len(ALLOWED_EXTENSIONS),
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "description": "Convertisseur de fichiers sécurisé vers PDF - Support étendu",
-        "security": "Nécessite une clé API pour upload ET téléchargement",
-        "version": "2.1-secure",
-        "examples": {
-            "google_docs": "gdoc",
-            "microsoft_office": "doc, docx, ppt, pptx, xlsx",
-            "apple_iwork": "pages, key, numbers",
-            "open_office": "odt, odp, ods",
-            "images": "png, jpg, gif, svg, webp",
-            "web": "html, htm, md"
-        }
+        "security": "Clé API requise pour upload, téléchargements publics",
+        "version": "2.3-stable"
     })
 
 @app.route('/status')
@@ -476,19 +392,12 @@ def status():
         
         return jsonify({
             "status": "Active",
-            "version": "2.1-secure",
+            "version": "2.3-stable",
             "files_in_upload": uploaded_files,
             "files_converted": converted_files,
             "supported_formats_count": len(ALLOWED_EXTENSIONS),
             "uptime": "Depuis le dernier déploiement",
-            "security": "Clé API active - URLs sécurisées",
-            "features": {
-                "api_security": True,
-                "secure_urls": True,
-                "file_size_limits": True,
-                "extended_format_support": True,
-                "format_categorization": True
-            }
+            "security": "Upload protégé par clé API - Téléchargements publics"
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -502,10 +411,9 @@ if __name__ == "__main__":
         print("⚠️  ATTENTION: Utilisez une vraie clé API en production!")
         print("   Définissez la variable d'environnement PDF_API_KEY")
     
-    print(f"🚀 Serveur PDF sécurisé v2.1-secure démarré sur le port {port}")
-    print(f"🔑 Clé API requise: {'***' + API_KEY[-4:] if len(API_KEY) > 4 else '****'}")
+    print(f"🚀 Serveur PDF stable v2.3 démarré sur le port {port}")
+    print(f"🔑 Clé API requise pour uploads: {'***' + API_KEY[-4:] if len(API_KEY) > 4 else '****'}")
     print(f"📁 Formats supportés: {len(ALLOWED_EXTENSIONS)} types de fichiers")
-    print(f"📋 Catégories: Documents, Images, Tableurs, Présentations, Web, eBooks")
-    print(f"🛡️ URLs sécurisées: Clé API JAMAIS dans l'URL")
+    print(f"🌍 Téléchargements publics: /public/download/<filename>")
     
     app.run(host='0.0.0.0', port=port, debug=False)
