@@ -231,6 +231,26 @@ def enhanced_convert_file(input_path, output_path, file_extension):
         print(f"Erreur de conversion: {e}")
         return False, f"Erreur: {str(e)}"
 
+@app.route('/')
+def home():
+    """Page d'accueil avec informations sur l'API"""
+    return jsonify({
+        "service": "Convertisseur PDF Sécurisé",
+        "version": "2.1-secure",
+        "description": "API de conversion de fichiers vers PDF avec authentification",
+        "endpoints": {
+            "health": "/health",
+            "formats": "/formats", 
+            "convert": "POST /convert (nécessite clé API)",
+            "download": "/download/<filename> (nécessite clé API)",
+            "status": "/status (nécessite clé API)"
+        },
+        "authentication": "Clé API requise via header 'X-API-Key'",
+        "supported_formats": len(ALLOWED_EXTENSIONS),
+        "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
+        "documentation": "Voir /formats pour la liste complète des formats"
+    })
+
 @app.route('/health')
 def health():
     return jsonify({
