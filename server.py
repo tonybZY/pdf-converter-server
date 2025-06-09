@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+# Formats supportés - ÉTENDUfrom flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import os
 import uuid
@@ -7,7 +7,8 @@ from werkzeug.utils import secure_filename
 import shutil
 from functools import wraps
 import hashlib
-import time
+import threading
+import time as time_module
 
 app = Flask(__name__)
 CORS(app)
@@ -22,7 +23,42 @@ MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB max
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CONVERTED_FOLDER, exist_ok=True)
 
-# Formats supportés - ÉTENDU
+# Stockage temporaire des tokens de téléchargement
+download_tokens = {}
+token_lock = threading.Lock()
+
+def generate_download_token(filename):
+    """Génère un token temporaire pour le téléchargement"""
+    token = str(uuid.uuid4())
+    expiry = time.time() + 3600  # Expire dans 1 heure
+    
+    with token_lock:
+        download_tokens[token] = {
+            'filename': filename,
+            'expires_at': expiry
+        }
+        
+        # Nettoyer les tokens expirés
+        current_time = time.time()
+        expired_tokens = [t for t, data in download_tokens.items() 
+                         if data['expires_at'] < current_time]
+        for expired in expired_tokens:
+            del download_tokens[expired]
+    
+    return token
+
+def validate_download_token(token):
+    """Valide et retourne le nom de fichier pour un token"""
+    with token_lock:
+        if token not in download_tokens:
+            return None
+        
+        data = download_tokens[token]
+        if data['expires_at'] < time.time():
+            del download_tokens[token]
+            return None
+        
+        return data['filename']
 ALLOWED_EXTENSIONS = {
     # Documents PDF et texte
     'pdf', 'txt', 'rtf',
@@ -236,12 +272,13 @@ def home():
     """Page d'accueil avec informations sur l'API"""
     return jsonify({
         "service": "Convertisseur PDF Sécurisé",
-        "version": "2.1-secure",
+        "version": "2.2-public-download",
         "description": "API de conversion de fichiers vers PDF avec authentification",
         "endpoints": {
             "health": "/health",
             "formats": "/formats", 
             "convert": "POST /convert (nécessite clé API)",
+            "public_download": "/public/download/<filename> (AUCUNE authentification)",
             "download": "/download/<filename> (nécessite clé API)",
             "status": "/status (nécessite clé API)"
         },
@@ -325,9 +362,9 @@ def convert():
         if not conversion_success:
             return jsonify({"error": f"Échec de la conversion: {conversion_message}"}), 500
         
-        # Construire l'URL de téléchargement avec clé API en paramètre pour faciliter les tests
+        # Construire l'URL de téléchargement PUBLIC (sans authentification)
         base_url = request.host_url.rstrip('/')
-        download_url = f"{base_url}/download/{converted_filename}?api_key={API_KEY}"
+        download_url = f"{base_url}/public/download/{converted_filename}"
         
         processing_time = round(time.time() - start_time, 3)
         
@@ -345,7 +382,7 @@ def convert():
             "conversion_method": conversion_message,
             "message": f"Fichier {file_extension.upper()} traité avec succès!",
             "format_category": get_format_category(file_extension),
-            "security_note": "URL inclut la clé API pour faciliter les tests - Masquez l'URL en production"
+            "security_note": "URL publique permanente - aucune authentification requise pour le téléchargement"
         })
         
     except Exception as e:
@@ -368,11 +405,33 @@ def get_format_category(extension):
             return category
     return 'unknown'
 
-@app.route('/download/<filename>')
-@require_api_key
-def download_file(filename):
-    """Route sécurisée pour télécharger les fichiers convertis"""
+@app.route('/public/download/<filename>')
+def public_download(filename):
+    """Route publique pour télécharger les fichiers convertis - AUCUNE AUTHENTIFICATION"""
     try:
+        return send_from_directory(CONVERTED_FOLDER, filename, as_attachment=True)
+    except FileNotFoundError:
+        return jsonify({"error": "Fichier non trouvé"}), 404
+
+@app.route('/download/<token>')
+def download_file(token):
+    """Route sécurisée pour télécharger les fichiers avec token temporaire"""
+    try:
+        # Vérifier si c'est un token ou un nom de fichier direct (rétrocompatibilité)
+        if len(token) == 36 and '-' in token:  # Format UUID
+            filename = validate_download_token(token)
+            if not filename:
+                return jsonify({"error": "Token invalide ou expiré"}), 404
+        else:
+            # Mode legacy avec clé API requise
+            api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
+            if not api_key or api_key != API_KEY:
+                return jsonify({
+                    "error": "Clé API manquante ou invalide",
+                    "message": "Utilisez le header 'X-API-Key' ou le paramètre 'api_key'"
+                }), 401
+            filename = token
+        
         return send_from_directory(CONVERTED_FOLDER, filename, as_attachment=True)
     except FileNotFoundError:
         return jsonify({"error": "Fichier non trouvé"}), 404
