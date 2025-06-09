@@ -22,8 +22,23 @@ MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB max
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CONVERTED_FOLDER, exist_ok=True)
 
-# Formats supportés
-ALLOWED_EXTENSIONS = {'pdf', 'txt', 'png', 'jpg', 'jpeg', 'gif', 'csv', 'xlsx', 'doc', 'docx'}
+# Formats supportés - ÉTENDU
+ALLOWED_EXTENSIONS = {
+    # Documents PDF et texte
+    'pdf', 'txt', 'rtf',
+    # Documents bureautiques
+    'doc', 'docx', 'gdoc', 'odt', 'pages',
+    # Présentations
+    'ppt', 'pptx', 'odp', 'key',
+    # Tableurs
+    'csv', 'xlsx', 'xls', 'ods', 'numbers',
+    # Images standards
+    'png', 'jpg', 'jpeg', 'gif', 'bmp',
+    # Images avancées
+    'tiff', 'tif', 'webp', 'svg', 'ico',
+    # Web et autres
+    'html', 'htm', 'epub', 'md'
+}
 
 def require_api_key(f):
     """Décorateur pour vérifier la clé API"""
@@ -139,25 +154,75 @@ def enhanced_convert_file(input_path, output_path, file_extension):
             shutil.copy2(input_path, output_path)
             return True, "PDF copié"
             
-        elif file_extension == 'txt':
-            # Conversion texte vers PDF
+        elif file_extension in ['txt', 'md']:
+            # Conversion texte/markdown vers PDF
             success = convert_text_to_pdf(input_path, output_path)
-            return success, "Texte converti en PDF" if success else "Échec conversion texte"
+            return success, f"Texte {file_extension.upper()} converti en PDF" if success else "Échec conversion texte"
             
-        elif file_extension in ['png', 'jpg', 'jpeg', 'gif']:
-            # Pour les images, on copie en attendant l'implémentation complète
+        elif file_extension in ['png', 'jpg', 'jpeg', 'gif', 'bmp']:
+            # Images standards
             shutil.copy2(input_path, output_path)
-            return True, "Image préparée (conversion PDF en développement)"
+            return True, f"Image {file_extension.upper()} préparée (conversion PDF en développement)"
             
-        elif file_extension in ['csv', 'xlsx']:
-            # Pour les tableurs, on copie en attendant
+        elif file_extension in ['tiff', 'tif', 'webp', 'svg', 'ico']:
+            # Images avancées
             shutil.copy2(input_path, output_path)
-            return True, "Tableur préparé (conversion PDF en développement)"
+            return True, f"Image {file_extension.upper()} préparée (conversion PDF en développement)"
+            
+        elif file_extension in ['csv', 'xlsx', 'xls']:
+            # Tableurs Microsoft
+            shutil.copy2(input_path, output_path)
+            return True, f"Tableur {file_extension.upper()} préparé (conversion PDF en développement)"
+            
+        elif file_extension in ['ods', 'numbers']:
+            # Tableurs autres (LibreOffice, Apple)
+            shutil.copy2(input_path, output_path)
+            return True, f"Tableur {file_extension.upper()} préparé (conversion PDF en développement)"
             
         elif file_extension in ['doc', 'docx']:
-            # Pour Word, on copie en attendant
+            # Documents Microsoft Word
             shutil.copy2(input_path, output_path)
-            return True, "Document Word préparé (conversion PDF en développement)"
+            return True, f"Document Word {file_extension.upper()} préparé (conversion PDF en développement)"
+            
+        elif file_extension in ['gdoc', 'odt']:
+            # Documents Google/LibreOffice
+            shutil.copy2(input_path, output_path)
+            return True, f"Document {file_extension.upper()} préparé (conversion PDF en développement)"
+            
+        elif file_extension in ['pages']:
+            # Documents Apple Pages
+            shutil.copy2(input_path, output_path)
+            return True, "Document Apple Pages préparé (conversion PDF en développement)"
+            
+        elif file_extension in ['rtf']:
+            # Rich Text Format
+            shutil.copy2(input_path, output_path)
+            return True, "Document RTF préparé (conversion PDF en développement)"
+            
+        elif file_extension in ['ppt', 'pptx']:
+            # Présentations Microsoft PowerPoint
+            shutil.copy2(input_path, output_path)
+            return True, f"Présentation PowerPoint {file_extension.upper()} préparée (conversion PDF en développement)"
+            
+        elif file_extension in ['odp']:
+            # Présentations LibreOffice
+            shutil.copy2(input_path, output_path)
+            return True, "Présentation LibreOffice préparée (conversion PDF en développement)"
+            
+        elif file_extension in ['key']:
+            # Présentations Apple Keynote
+            shutil.copy2(input_path, output_path)
+            return True, "Présentation Apple Keynote préparée (conversion PDF en développement)"
+            
+        elif file_extension in ['html', 'htm']:
+            # Pages web
+            shutil.copy2(input_path, output_path)
+            return True, f"Page Web {file_extension.upper()} préparée (conversion PDF en développement)"
+            
+        elif file_extension in ['epub']:
+            # eBooks
+            shutil.copy2(input_path, output_path)
+            return True, "eBook EPUB préparé (conversion PDF en développement)"
             
         else:
             return False, "Format non supporté"
@@ -170,9 +235,10 @@ def enhanced_convert_file(input_path, output_path, file_extension):
 def health():
     return jsonify({
         "status": "OK",
-        "version": "2.0",
-        "features": ["API Key Security", "Enhanced Conversion", "File Size Limits"],
-        "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024)
+        "version": "2.1",
+        "features": ["API Key Security", "Enhanced Conversion", "File Size Limits", "Extended Format Support"],
+        "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
+        "total_supported_formats": len(ALLOWED_EXTENSIONS)
     })
 
 @app.route('/convert', methods=['POST'])
@@ -206,7 +272,8 @@ def convert():
     if not allowed_file(file.filename):
         return jsonify({
             "error": "Format de fichier non supporté",
-            "supported_formats": list(ALLOWED_EXTENSIONS)
+            "supported_formats": sorted(list(ALLOWED_EXTENSIONS)),
+            "hint": "Formats acceptés: Documents (doc, docx, gdoc, pdf, txt), Images (png, jpg, gif), Tableurs (xlsx, csv), Présentations (ppt, pptx), et plus..."
         }), 400
     
     try:
@@ -256,12 +323,29 @@ def convert():
             "file_size_mb": round(file_size / (1024 * 1024), 2),
             "processing_time_seconds": processing_time,
             "conversion_method": conversion_message,
-            "message": f"Fichier {file_extension.upper()} traité avec succès!"
+            "message": f"Fichier {file_extension.upper()} traité avec succès!",
+            "format_category": get_format_category(file_extension)
         })
         
     except Exception as e:
         print(f"❌ Erreur: {str(e)}")
         return jsonify({"error": f"Erreur de traitement: {str(e)}"}), 500
+
+def get_format_category(extension):
+    """Retourne la catégorie du format de fichier"""
+    categories = {
+        'documents': ['pdf', 'doc', 'docx', 'gdoc', 'odt', 'pages', 'txt', 'rtf', 'md'],
+        'images': ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'tif', 'webp', 'svg', 'ico'],
+        'spreadsheets': ['csv', 'xlsx', 'xls', 'ods', 'numbers'],
+        'presentations': ['ppt', 'pptx', 'odp', 'key'],
+        'web': ['html', 'htm'],
+        'ebooks': ['epub']
+    }
+    
+    for category, extensions in categories.items():
+        if extension in extensions:
+            return category
+    return 'unknown'
 
 @app.route('/download/<filename>')
 @require_api_key
@@ -274,13 +358,32 @@ def download_file(filename):
 
 @app.route('/formats')
 def supported_formats():
-    """Liste des formats supportés (pas besoin d'API key pour info publique)"""
+    """Liste détaillée des formats supportés"""
+    formats_by_category = {
+        "documents": ["pdf", "doc", "docx", "gdoc", "odt", "pages", "txt", "rtf", "md"],
+        "images": ["png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "webp", "svg", "ico"],
+        "spreadsheets": ["csv", "xlsx", "xls", "ods", "numbers"],
+        "presentations": ["ppt", "pptx", "odp", "key"],
+        "web": ["html", "htm"],
+        "ebooks": ["epub"]
+    }
+    
     return jsonify({
-        "supported_formats": list(ALLOWED_EXTENSIONS),
+        "supported_formats": sorted(list(ALLOWED_EXTENSIONS)),
+        "formats_by_category": formats_by_category,
+        "total_formats": len(ALLOWED_EXTENSIONS),
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
-        "description": "Convertisseur de fichiers sécurisé vers PDF",
+        "description": "Convertisseur de fichiers sécurisé vers PDF - Support étendu",
         "security": "Nécessite une clé API",
-        "version": "2.0"
+        "version": "2.1",
+        "examples": {
+            "google_docs": "gdoc",
+            "microsoft_office": "doc, docx, ppt, pptx, xlsx",
+            "apple_iwork": "pages, key, numbers",
+            "open_office": "odt, odp, ods",
+            "images": "png, jpg, gif, svg, webp",
+            "web": "html, htm, md"
+        }
     })
 
 @app.route('/status')
@@ -293,10 +396,18 @@ def status():
         
         return jsonify({
             "status": "Active",
+            "version": "2.1",
             "files_in_upload": uploaded_files,
             "files_converted": converted_files,
+            "supported_formats_count": len(ALLOWED_EXTENSIONS),
             "uptime": "Depuis le dernier déploiement",
-            "security": "Clé API active"
+            "security": "Clé API active",
+            "features": {
+                "api_security": True,
+                "file_size_limits": True,
+                "extended_format_support": True,
+                "format_categorization": True
+            }
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -310,7 +421,9 @@ if __name__ == "__main__":
         print("⚠️  ATTENTION: Utilisez une vraie clé API en production!")
         print("   Définissez la variable d'environnement PDF_API_KEY")
     
-    print(f"🚀 Serveur PDF sécurisé démarré sur le port {port}")
+    print(f"🚀 Serveur PDF sécurisé v2.1 démarré sur le port {port}")
     print(f"🔑 Clé API requise: {'***' + API_KEY[-4:] if len(API_KEY) > 4 else '****'}")
+    print(f"📁 Formats supportés: {len(ALLOWED_EXTENSIONS)} types de fichiers")
+    print(f"📋 Catégories: Documents, Images, Tableurs, Présentations, Web, eBooks")
     
     app.run(host='0.0.0.0', port=port, debug=False)
