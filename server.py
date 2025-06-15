@@ -45,6 +45,33 @@ except ImportError:
     GOOGLE_API_AVAILABLE = False
     print("⚠️  Google API non disponible - téléchargement Google Drive limité")
 
+# Imports pour conversion DOCX
+try:
+    from docx import Document
+    import docx2txt
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+    print("⚠️  python-docx non disponible - conversion DOCX limitée")
+
+try:
+    import PyPDF2
+    PYPDF2_AVAILABLE = True
+except ImportError:
+    PYPDF2_AVAILABLE = False
+    print("⚠️  PyPDF2 non disponible - manipulation PDF limitée")
+
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.utils import simpleSplit
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+    print("⚠️  ReportLab non disponible - création PDF avancée limitée")
+
 app = Flask(__name__)
 CORS(app)
 
@@ -123,6 +150,17 @@ def get_file_size(file):
     file.seek(0)
     return size
 
+def get_file_extension_safe(filename):
+    """Extraction sûre de l'extension"""
+    if not filename or '.' not in filename:
+        return None
+    
+    # Gérer les cas spéciaux comme .tar.gz
+    parts = filename.lower().split('.')
+    if len(parts) >= 2:
+        return parts[-1]
+    return None
+
 def extract_google_drive_id(url):
     """Extrait l'ID du fichier Google Drive depuis une URL"""
     patterns = [
@@ -191,74 +229,194 @@ def download_google_drive_file(file_id):
     except Exception as e:
         return None, None, f"Erreur téléchargement Google Drive: {str(e)}"
 
+def extract_text_from_binary(content):
+    """Extrait du texte d'un fichier binaire DOCX"""
+    try:
+        # Chercher du texte entre les balises XML
+        text_parts = []
+        # Pattern simplifié pour extraire du texte
+        import re
+        pattern = re.compile(b'<w:t[^>]*>([^<]+)</w:t>')
+        matches = pattern.findall(content)
+        for match in matches:
+            try:
+                text_parts.append(match.decode('utf-8', errors='ignore'))
+            except:
+                pass
+        return ' '.join(text_parts)
+    except:
+        return "Impossible d'extraire le texte du document"
+
+def create_simple_pdf_from_text(text, output_path):
+    """Crée un PDF simple sans dépendances externes"""
+    try:
+        # Nettoyer le texte
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        lines = text.split('\n')
+        
+        # Limiter et formater le texte
+        formatted_lines = []
+        for line in lines[:100]:  # Max 100 lignes
+            if len(line) > 80:
+                line = line[:77] + "..."
+            # Échapper les caractères spéciaux PDF
+            line = line.replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
+            formatted_lines.append(line)
+        
+        # Créer le PDF
+        pdf_content = f"""%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<<
+/Type /Page
+/Parent 2 0 R
+/Resources << /Font << /F1 4 0 R >> >>
+/MediaBox [0 0 612 792]
+/Contents 5 0 R
+>>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length {len(formatted_lines) * 50 + 100} >>
+stream
+BT
+/F1 10 Tf
+50 750 Td
+12 TL
+"""
+        
+        # Ajouter chaque ligne
+        for line in formatted_lines:
+            pdf_content += f"({line}) '\n"
+        
+        pdf_content += """ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000262 00000 n 
+0000000341 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+{len(pdf_content)}
+%%EOF"""
+        
+        # Écrire le PDF
+        with open(output_path, 'wb') as f:
+            f.write(pdf_content.encode('latin-1', errors='replace'))
+        
+        return True, "DOCX converti en PDF simple"
+        
+    except Exception as e:
+        return False, f"Erreur création PDF: {str(e)}"
+
+def create_pdf_from_text(text, output_path):
+    """Crée un PDF à partir de texte avec support Unicode"""
+    try:
+        if REPORTLAB_AVAILABLE:
+            # Utiliser ReportLab pour un meilleur PDF
+            c = canvas.Canvas(output_path, pagesize=letter)
+            width, height = letter
+            
+            # Configuration de la police
+            try:
+                # Essayer de charger une police Unicode
+                pdfmetrics.registerFont(TTFont('DejaVu', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
+                font_name = 'DejaVu'
+            except:
+                font_name = 'Helvetica'
+            
+            # Écrire le texte
+            y = height - 50
+            c.setFont(font_name, 12)
+            
+            for line in text.split('\n'):
+                if y < 50:  # Nouvelle page si nécessaire
+                    c.showPage()
+                    c.setFont(font_name, 12)
+                    y = height - 50
+                
+                # Diviser les lignes trop longues
+                if len(line) > 80:
+                    wrapped_lines = simpleSplit(line, font_name, 12, width - 100)
+                    for wrapped_line in wrapped_lines:
+                        if y < 50:
+                            c.showPage()
+                            c.setFont(font_name, 12)
+                            y = height - 50
+                        c.drawString(50, y, wrapped_line)
+                        y -= 15
+                else:
+                    c.drawString(50, y, line)
+                    y -= 15
+            
+            c.save()
+            return True, "DOCX converti en PDF avec ReportLab"
+        else:
+            # Fallback: PDF simple
+            return create_simple_pdf_from_text(text, output_path)
+            
+    except Exception as e:
+        print(f"Erreur création PDF: {e}")
+        # Fallback en cas d'erreur
+        return create_simple_pdf_from_text(text, output_path)
+
+def convert_docx_to_pdf(input_path, output_path):
+    """Convertit un fichier DOCX en PDF"""
+    try:
+        text = ""
+        
+        if DOCX_AVAILABLE:
+            try:
+                # Méthode 1: Utiliser docx2txt (plus robuste)
+                text = docx2txt.process(input_path)
+            except:
+                try:
+                    # Méthode 2: Utiliser python-docx
+                    doc = Document(input_path)
+                    text = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
+                except:
+                    pass
+        
+        if not text:
+            # Fallback: lire comme binaire et extraire ce qu'on peut
+            with open(input_path, 'rb') as f:
+                content = f.read()
+                text = extract_text_from_binary(content)
+        
+        if not text:
+            text = "Impossible d'extraire le contenu du document DOCX"
+        
+        # Créer un PDF avec le texte extrait
+        return create_pdf_from_text(text, output_path)
+        
+    except Exception as e:
+        print(f"Erreur conversion DOCX: {e}")
+        return False, f"Erreur conversion DOCX: {str(e)}"
+
 def convert_text_to_pdf(input_path, output_path):
     """Convertit un fichier texte en PDF simple"""
     try:
         with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
         
-        # PDF basique - version corrigée
-        pdf_content = f"""%PDF-1.4
-1 0 obj
-<<
-/Type /Catalog
-/Pages 2 0 R
->>
-endobj
-
-2 0 obj
-<<
-/Type /Pages
-/Kids [3 0 R]
-/Count 1
->>
-endobj
-
-3 0 obj
-<<
-/Type /Page
-/Parent 2 0 R
-/MediaBox [0 0 612 792]
-/Contents 4 0 R
->>
-endobj
-
-4 0 obj
-<<
-/Length {len(content) + 50}
->>
-stream
-BT
-/F1 12 Tf
-50 750 Td
-({content[:500].replace('(', '\\(').replace(')', '\\)').replace('\\', '\\\\')}) Tj
-ET
-endstream
-endobj
-
-xref
-0 5
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
-0000000199 00000 n 
-trailer
-<<
-/Size 5
-/Root 1 0 R
->>
-startxref
-{300 + len(content)}
-%%EOF"""
+        return create_pdf_from_text(content, output_path)
         
-        with open(output_path, 'wb') as f:
-            f.write(pdf_content.encode('latin-1', errors='ignore'))
-        
-        return True
     except Exception as e:
         print(f"Erreur conversion texte: {e}")
-        return False
+        return False, f"Erreur conversion texte: {str(e)}"
 
 def clean_document_content(raw_content):
     """Nettoie le contenu du document pour un meilleur affichage"""
@@ -625,6 +783,29 @@ def enhanced_convert_to_image(input_path, output_path, file_extension, target_fo
         elif file_extension == 'gdoc':
             return convert_gdoc_to_image(input_path, output_path, target_format)
             
+        elif file_extension in ['doc', 'docx']:
+            # Pour DOCX vers image, extraire le texte d'abord
+            try:
+                text = ""
+                if DOCX_AVAILABLE:
+                    try:
+                        text = docx2txt.process(input_path)
+                    except:
+                        try:
+                            doc = Document(input_path)
+                            text = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
+                        except:
+                            pass
+                
+                if not text:
+                    with open(input_path, 'rb') as f:
+                        content = f.read()
+                        text = extract_text_from_binary(content)
+                
+                return create_document_image_advanced(text, output_path, f"Document {file_extension.upper()}", target_format)
+            except:
+                return create_placeholder_image(output_path, f"DOC\n{file_extension.upper()}", target_format), "Erreur conversion DOCX"
+            
         elif file_extension in ['csv', 'rtf']:
             try:
                 with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -633,7 +814,7 @@ def enhanced_convert_to_image(input_path, output_path, file_extension, target_fo
             except:
                 return create_placeholder_image(output_path, f"DOC\n{file_extension.upper()}", target_format), "Erreur lecture fichier"
             
-        elif file_extension in ['doc', 'docx', 'odt', 'pages']:
+        elif file_extension in ['odt', 'pages']:
             try:
                 with open(input_path, 'rb') as f:
                     content = f.read()[:1000].decode('utf-8', errors='ignore')
@@ -649,25 +830,414 @@ def enhanced_convert_to_image(input_path, output_path, file_extension, target_fo
         return False, f"Erreur: {str(e)}"
 
 def enhanced_convert_file(input_path, output_path, file_extension):
-    """Conversion améliorée selon le type de fichier (garde le code existant)"""
+    """Conversion améliorée selon le type de fichier"""
     try:
-        if file_extension == 'pdf':
+        # Debug
+        print(f"Extension détectée: '{file_extension}'")
+        print(f"Extension dans ALLOWED_EXTENSIONS: {file_extension in ALLOWED_EXTENSIONS}")
+        
+        if file_extension == 'pdf' and PYMUPDF_AVAILABLE:
+            conversion_success, conversion_message = convert_pdf_to_image_advanced(temp_path, converted_path, target_format, page_num)
+        elif file_extension in ['txt', 'md'] and ENABLE_TEXT_TO_IMAGE:
+            conversion_success, conversion_message = create_text_to_image_advanced(temp_path, converted_path, target_format, width, height)
+        else:
+            conversion_success, conversion_message = enhanced_convert_to_image(temp_path, converted_path, file_extension, target_format)
+        
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        
+        if not conversion_success:
+            return jsonify({"error": f"Échec de la conversion: {conversion_message}"}), 500
+        
+        base_url = request.host_url.rstrip('/')
+        download_url = f"{base_url}/public/download/{converted_filename}"
+        
+        processing_time = round(time.time() - start_time, 3)
+        
+        print(f"✅ Conversion image réussie: {converted_path}")
+        print(f"🔗 URL publique: {download_url}")
+        print(f"⏱️ Temps de traitement: {processing_time}s")
+        
+        return jsonify({
+            "success": True,
+            "filename": converted_filename,
+            "download_url": download_url,
+            "original_format": file_extension,
+            "target_format": target_format,
+            "file_size_mb": round(file_size / (1024 * 1024), 2),
+            "processing_time_seconds": processing_time,
+            "conversion_method": conversion_message,
+            "message": f"Fichier {file_extension.upper()} converti en image {target_format.upper()} avec succès!",
+            "format_category": get_format_category(file_extension),
+            "conversion_type": "file_to_image",
+            "options_used": {
+                "width": width if file_extension in ['txt', 'md'] else None,
+                "height": height if file_extension in ['txt', 'md'] else None,
+                "page": page_num if file_extension == 'pdf' else None
+            }
+        })
+        
+    except Exception as e:
+        print(f"❌ Erreur: {str(e)}")
+        return jsonify({"error": f"Erreur de traitement: {str(e)}"}), 500
+
+@app.route('/convert', methods=['POST'])
+@require_api_key
+def convert():
+    """Route existante pour conversion vers PDF"""
+    start_time = time.time()
+    
+    print("=== REQUÊTE SÉCURISÉE REÇUE ===")
+    print("Method:", request.method)
+    print("Content-Type:", request.content_type)
+    print("Files:", list(request.files.keys()))
+    print("API Key présente:", bool(request.headers.get('X-API-Key') or request.args.get('api_key') or request.form.get('api_key')))
+    
+    if 'file' not in request.files:
+        return jsonify({"error": "Pas de fichier fourni"}), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({"error": "Nom de fichier vide"}), 400
+    
+    file_size = get_file_size(file)
+    if file_size > MAX_FILE_SIZE:
+        return jsonify({
+            "error": "Fichier trop volumineux",
+            "max_size_mb": MAX_FILE_SIZE / (1024 * 1024),
+            "file_size_mb": round(file_size / (1024 * 1024), 2)
+        }), 413
+    
+    if not allowed_file(file.filename):
+        # Debug
+        file_ext = get_file_extension_safe(file.filename)
+        return jsonify({
+            "error": "Format de fichier non supporté",
+            "detected_extension": file_ext,
+            "filename": file.filename,
+            "supported_formats": sorted(list(ALLOWED_EXTENSIONS)),
+            "hint": "Formats acceptés: Documents (doc, docx, gdoc, pdf, txt), Images (png, jpg, gif), Tableurs (xlsx, csv), Présentations (ppt, pptx), et plus..."
+        }), 400
+    
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        request_hash = hashlib.md5(f"{file.filename}{timestamp}".encode()).hexdigest()[:8]
+        
+        original_name = secure_filename(file.filename)
+        base_name = os.path.splitext(original_name)[0]
+        file_extension = get_file_extension_safe(original_name) or 'tmp'
+        
+        # Debug
+        print(f"Fichier reçu: {original_name}")
+        print(f"Extension détectée: {file_extension}")
+        print(f"Extension valide: {file_extension in ALLOWED_EXTENSIONS}")
+        
+        temp_filename = f"temp_{request_hash}_{unique_id}.{file_extension}"
+        temp_path = os.path.join(UPLOAD_FOLDER, temp_filename)
+        file.save(temp_path)
+        
+        converted_filename = f"{base_name}_converted_{timestamp}_{unique_id}.pdf"
+        converted_path = os.path.join(CONVERTED_FOLDER, converted_filename)
+        
+        conversion_success, conversion_message = enhanced_convert_file(temp_path, converted_path, file_extension)
+        
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        
+        if not conversion_success:
+            return jsonify({"error": f"Échec de la conversion: {conversion_message}"}), 500
+        
+        base_url = request.host_url.rstrip('/')
+        download_url = f"{base_url}/public/download/{converted_filename}"
+        
+        processing_time = round(time.time() - start_time, 3)
+        
+        print(f"✅ Conversion réussie: {converted_path}")
+        print(f"🔗 URL publique: {download_url}")
+        print(f"⏱️ Temps de traitement: {processing_time}s")
+        
+        return jsonify({
+            "success": True,
+            "filename": converted_filename,
+            "download_url": download_url,
+            "original_format": file_extension,
+            "file_size_mb": round(file_size / (1024 * 1024), 2),
+            "processing_time_seconds": processing_time,
+            "conversion_method": conversion_message,
+            "message": f"Fichier {file_extension.upper()} traité avec succès!",
+            "format_category": get_format_category(file_extension),
+            "security_note": "URL publique permanente - aucune authentification requise pour le téléchargement"
+        })
+        
+    except Exception as e:
+        print(f"❌ Erreur: {str(e)}")
+        return jsonify({"error": f"Erreur de traitement: {str(e)}"}), 500
+
+@app.route('/metrics')
+@require_api_key
+def metrics():
+    """Endpoint de métriques pour monitoring"""
+    try:
+        uploaded_files = len(os.listdir(UPLOAD_FOLDER)) if os.path.exists(UPLOAD_FOLDER) else 0
+        converted_files = len(os.listdir(CONVERTED_FOLDER)) if os.path.exists(CONVERTED_FOLDER) else 0
+        
+        upload_size = sum(os.path.getsize(os.path.join(UPLOAD_FOLDER, f)) 
+                         for f in os.listdir(UPLOAD_FOLDER) 
+                         if os.path.isfile(os.path.join(UPLOAD_FOLDER, f))) if os.path.exists(UPLOAD_FOLDER) else 0
+        
+        converted_size = sum(os.path.getsize(os.path.join(CONVERTED_FOLDER, f)) 
+                            for f in os.listdir(CONVERTED_FOLDER) 
+                            if os.path.isfile(os.path.join(CONVERTED_FOLDER, f))) if os.path.exists(CONVERTED_FOLDER) else 0
+        
+        return jsonify({
+            "status": "active",
+            "version": "2.8-docx-fixed",
+            "timestamp": datetime.now().isoformat(),
+            "files": {
+                "uploaded_count": uploaded_files,
+                "converted_count": converted_files,
+                "upload_folder_size_mb": round(upload_size / (1024 * 1024), 2),
+                "converted_folder_size_mb": round(converted_size / (1024 * 1024), 2),
+                "total_size_mb": round((upload_size + converted_size) / (1024 * 1024), 2)
+            },
+            "features": {
+                "image_conversion": ENABLE_IMAGE_CONVERSION,
+                "advanced_pdf_conversion": ENABLE_ADVANCED_PDF_CONVERSION,
+                "text_to_image": ENABLE_TEXT_TO_IMAGE,
+                "google_drive": ENABLE_GOOGLE_DRIVE
+            },
+            "libraries": {
+                "pil_available": PIL_AVAILABLE,
+                "pymupdf_available": PYMUPDF_AVAILABLE,
+                "requests_available": REQUESTS_AVAILABLE,
+                "google_api_available": GOOGLE_API_AVAILABLE,
+                "docx_available": DOCX_AVAILABLE,
+                "pypdf2_available": PYPDF2_AVAILABLE,
+                "reportlab_available": REPORTLAB_AVAILABLE
+            },
+            "google_drive": {
+                "service_ready": google_drive_service is not None,
+                "service_account_file_exists": os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE)
+            },
+            "limits": {
+                "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
+                "supported_formats_count": len(ALLOWED_EXTENSIONS)
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/public/download/<filename>')
+def public_download(filename):
+    """Route publique pour télécharger les fichiers convertis"""
+    try:
+        return send_from_directory(CONVERTED_FOLDER, filename, as_attachment=True)
+    except FileNotFoundError:
+        return jsonify({"error": "Fichier non trouvé"}), 404
+
+@app.route('/formats')
+def supported_formats():
+    """Liste détaillée des formats supportés"""
+    formats_by_category = {
+        "documents": ["pdf", "doc", "docx", "gdoc", "odt", "pages", "txt", "rtf", "md"],
+        "images": ["png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "webp", "svg", "ico"],
+        "spreadsheets": ["csv", "xlsx", "xls", "ods", "numbers"],
+        "presentations": ["ppt", "pptx", "odp", "key"],
+        "web": ["html", "htm"],
+        "ebooks": ["epub"]
+    }
+    
+    return jsonify({
+        "supported_formats": sorted(list(ALLOWED_EXTENSIONS)),
+        "formats_by_category": formats_by_category,
+        "total_formats": len(ALLOWED_EXTENSIONS),
+        "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
+        "description": "Convertisseur de fichiers sécurisé vers PDF et Image - Support étendu avec Google Drive",
+        "security": "Clé API requise pour upload, téléchargements publics",
+        "version": "2.8-docx-fixed",
+        "new_features": [
+            "🆕 Support DOCX complet - conversion réelle vers PDF",
+            "🆕 Extraction de texte depuis fichiers binaires DOCX",
+            "🆕 Support ReportLab pour PDF de qualité",
+            "Support Google Drive - téléchargement et conversion directe",
+            "Extraction automatique des IDs Google Drive",
+            "Support des liens de partage Google Drive",
+            "Conversion d'URL vers image pour n8n",
+            "Support PIL/Pillow pour vraies conversions d'images",
+            "PyMuPDF pour conversion PDF vers image",
+            "Conversion texte vers image avec rendu",
+            "Feature flags pour déploiement progressif",
+            "Gestion améliorée des fichiers GDOC avec nettoyage JSON",
+            "Mise en forme avancée avec polices plus grandes et espacement",
+            "Surlignage intelligent des titres et listes"
+        ],
+        "google_drive_support": {
+            "enabled": ENABLE_GOOGLE_DRIVE,
+            "service_ready": google_drive_service is not None,
+            "supported_urls": [
+                "https://drive.google.com/file/d/FILE_ID/view",
+                "https://drive.google.com/open?id=FILE_ID",
+                "https://drive.google.com/uc?id=FILE_ID",
+                "Direct file ID"
+            ]
+        },
+        "docx_support": {
+            "enabled": DOCX_AVAILABLE,
+            "methods": [
+                "docx2txt - extraction rapide",
+                "python-docx - lecture structurée",
+                "Extraction binaire - fallback"
+            ],
+            "pdf_creation": [
+                "ReportLab - PDF haute qualité" if REPORTLAB_AVAILABLE else "PDF simple",
+                "Support Unicode",
+                "Mise en page automatique"
+            ]
+        }
+    })
+
+@app.route('/status')
+@require_api_key
+def status():
+    """Statut détaillé pour les utilisateurs authentifiés"""
+    try:
+        uploaded_files = len(os.listdir(UPLOAD_FOLDER)) if os.path.exists(UPLOAD_FOLDER) else 0
+        converted_files = len(os.listdir(CONVERTED_FOLDER)) if os.path.exists(CONVERTED_FOLDER) else 0
+        
+        return jsonify({
+            "status": "Active",
+            "version": "2.8-docx-fixed",
+            "files_in_upload": uploaded_files,
+            "files_converted": converted_files,
+            "supported_formats_count": len(ALLOWED_EXTENSIONS),
+            "uptime": "Depuis le dernier déploiement",
+            "security": "Upload protégé par clé API - Téléchargements publics",
+            "features": {
+                "image_conversion": ENABLE_IMAGE_CONVERSION,
+                "advanced_pdf_conversion": ENABLE_ADVANCED_PDF_CONVERSION,
+                "text_to_image": ENABLE_TEXT_TO_IMAGE,
+                "url_conversion": True,
+                "google_drive": ENABLE_GOOGLE_DRIVE,
+                "docx_conversion": DOCX_AVAILABLE
+            },
+            "libraries": {
+                "pil_available": PIL_AVAILABLE,
+                "pymupdf_available": PYMUPDF_AVAILABLE,
+                "requests_available": REQUESTS_AVAILABLE,
+                "google_api_available": GOOGLE_API_AVAILABLE,
+                "docx_available": DOCX_AVAILABLE,
+                "pypdf2_available": PYPDF2_AVAILABLE,
+                "reportlab_available": REPORTLAB_AVAILABLE
+            },
+            "google_drive_status": {
+                "enabled": ENABLE_GOOGLE_DRIVE,
+                "service_ready": google_drive_service is not None,
+                "service_account_configured": os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE),
+                "api_available": GOOGLE_API_AVAILABLE
+            },
+            "docx_status": {
+                "conversion_available": DOCX_AVAILABLE,
+                "pdf_quality": "Haute" if REPORTLAB_AVAILABLE else "Basique",
+                "extraction_methods": sum([DOCX_AVAILABLE, True])  # Au moins extraction binaire
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    port = int(os.environ.get('PORT', 8080))
+    
+    if API_KEY == 'votre-cle-secrete-changez-moi':
+        print("⚠️  ATTENTION: Utilisez une vraie clé API en production!")
+        print("   Définissez la variable d'environnement PDF_API_KEY")
+    
+    print(f"🚀 Serveur PDF/Image Enhanced v2.8-docx-fixed démarré sur le port {port}")
+    print(f"🔑 Clé API requise pour uploads: {'***' + API_KEY[-4:] if len(API_KEY) > 4 else '****'}")
+    print(f"📁 Formats supportés: {len(ALLOWED_EXTENSIONS)} types de fichiers")
+    print(f"🌍 Téléchargements publics: /public/download/<filename>")
+    print(f"🎯 Feature Flags:")
+    print(f"   - Image Conversion: {ENABLE_IMAGE_CONVERSION}")
+    print(f"   - Advanced PDF Conversion: {ENABLE_ADVANCED_PDF_CONVERSION}")
+    print(f"   - Text to Image: {ENABLE_TEXT_TO_IMAGE}")
+    print(f"   - Google Drive: {ENABLE_GOOGLE_DRIVE}")
+    print(f"📚 Bibliothèques:")
+    print(f"   - PIL/Pillow: {'✅' if PIL_AVAILABLE else '❌'}")
+    print(f"   - PyMuPDF: {'✅' if PYMUPDF_AVAILABLE else '❌'}")
+    print(f"   - Requests: {'✅' if REQUESTS_AVAILABLE else '❌'}")
+    print(f"   - Google API: {'✅' if GOOGLE_API_AVAILABLE else '❌'}")
+    print(f"   - 🆕 python-docx: {'✅' if DOCX_AVAILABLE else '❌'}")
+    print(f"   - 🆕 PyPDF2: {'✅' if PYPDF2_AVAILABLE else '❌'}")
+    print(f"   - 🆕 ReportLab: {'✅' if REPORTLAB_AVAILABLE else '❌'}")
+    print(f"🔗 Endpoints principaux:")
+    print(f"   - POST /convert (PDF)")
+    print(f"   - POST /convert-to-image (Image)")
+    print(f"   - POST /convert-url-to-image (URL pour n8n)")
+    print(f"   - POST /convert-google-drive (Google Drive)")
+    print(f"   - GET /test-pil (test PIL)")
+    print(f"   - GET /metrics (monitoring)")
+    
+    if ENABLE_GOOGLE_DRIVE:
+        print(f"📋 Configuration Google Drive:")
+        print(f"   - Service Account: {'✅ Configuré' if os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE) else '❌ Manquant'}")
+        print(f"   - Service Ready: {'✅' if google_drive_service else '❌'}")
+        if not os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE):
+            print(f"   ⚠️  Créez un fichier service-account.json pour activer Google Drive")
+            print(f"   ⚠️  Ou définissez GOOGLE_SERVICE_ACCOUNT_FILE")
+    
+    print(f"🎨 Améliorations v2.8:")
+    print(f"   - 🆕 Support DOCX natif avec python-docx")
+    print(f"   - 🆕 Création de PDF avec ReportLab")
+    print(f"   - 🆕 Extraction de texte depuis fichiers binaires")
+    print(f"   - 🆕 Meilleure gestion des extensions de fichiers")
+    print(f"   - Support complet Google Drive")
+    print(f"   - Conversion directe Google Drive vers PDF/Image")
+    print(f"   - Toutes les fonctionnalités v2.7 conservées")
+    
+    app.run(host='0.0.0.0', port=port, debug=False):
             shutil.copy2(input_path, output_path)
             return True, "PDF copié"
             
         elif file_extension in ['txt', 'md']:
-            success = convert_text_to_pdf(input_path, output_path)
-            return success, f"Texte {file_extension.upper()} converti en PDF" if success else "Échec conversion texte"
+            return convert_text_to_pdf(input_path, output_path)
+            
+        elif file_extension in ['doc', 'docx']:
+            # CONVERSION DOCX VERS PDF
+            return convert_docx_to_pdf(input_path, output_path)
             
         elif file_extension in ['png', 'jpg', 'jpeg', 'gif', 'bmp']:
-            shutil.copy2(input_path, output_path)
-            return True, f"Image {file_extension.upper()} préparée (conversion PDF en développement)"
+            # Conversion image vers PDF
+            if PIL_AVAILABLE:
+                try:
+                    img = Image.open(input_path)
+                    img.save(output_path, "PDF", resolution=100.0)
+                    return True, f"Image {file_extension.upper()} convertie en PDF"
+                except:
+                    shutil.copy2(input_path, output_path)
+                    return True, f"Image {file_extension.upper()} préparée (conversion PDF limitée)"
+            else:
+                shutil.copy2(input_path, output_path)
+                return True, f"Image {file_extension.upper()} préparée (PIL non disponible)"
             
         elif file_extension in ['tiff', 'tif', 'webp', 'svg', 'ico']:
-            shutil.copy2(input_path, output_path)
-            return True, f"Image {file_extension.upper()} préparée (conversion PDF en développement)"
+            if PIL_AVAILABLE:
+                try:
+                    img = Image.open(input_path)
+                    # Convertir en RGB si nécessaire
+                    if img.mode not in ['RGB', 'L']:
+                        img = img.convert('RGB')
+                    img.save(output_path, "PDF", resolution=100.0)
+                    return True, f"Image {file_extension.upper()} convertie en PDF"
+                except:
+                    shutil.copy2(input_path, output_path)
+                    return True, f"Image {file_extension.upper()} préparée"
+            else:
+                shutil.copy2(input_path, output_path)
+                return True, f"Image {file_extension.upper()} préparée"
             
         elif file_extension in ['csv', 'xlsx', 'xls']:
+            # TODO: Implémenter la conversion tableur vers PDF
             shutil.copy2(input_path, output_path)
             return True, f"Tableur {file_extension.upper()} préparé (conversion PDF en développement)"
             
@@ -675,11 +1245,8 @@ def enhanced_convert_file(input_path, output_path, file_extension):
             shutil.copy2(input_path, output_path)
             return True, f"Tableur {file_extension.upper()} préparé (conversion PDF en développement)"
             
-        elif file_extension in ['doc', 'docx']:
-            shutil.copy2(input_path, output_path)
-            return True, f"Document Word {file_extension.upper()} préparé (conversion PDF en développement)"
-            
         elif file_extension in ['gdoc', 'odt']:
+            # Pour l'instant, copier le fichier
             shutil.copy2(input_path, output_path)
             return True, f"Document {file_extension.upper()} préparé (conversion PDF en développement)"
             
@@ -688,8 +1255,14 @@ def enhanced_convert_file(input_path, output_path, file_extension):
             return True, "Document Apple Pages préparé (conversion PDF en développement)"
             
         elif file_extension in ['rtf']:
-            shutil.copy2(input_path, output_path)
-            return True, "Document RTF préparé (conversion PDF en développement)"
+            # Essayer de lire comme texte
+            try:
+                with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                return create_pdf_from_text(content, output_path)
+            except:
+                shutil.copy2(input_path, output_path)
+                return True, "Document RTF préparé"
             
         elif file_extension in ['ppt', 'pptx']:
             shutil.copy2(input_path, output_path)
@@ -704,15 +1277,24 @@ def enhanced_convert_file(input_path, output_path, file_extension):
             return True, "Présentation Apple Keynote préparée (conversion PDF en développement)"
             
         elif file_extension in ['html', 'htm']:
-            shutil.copy2(input_path, output_path)
-            return True, f"Page Web {file_extension.upper()} préparée (conversion PDF en développement)"
+            # Lire le HTML et créer un PDF simple
+            try:
+                with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                # Extraire le texte du HTML (basique)
+                import re
+                text = re.sub('<[^<]+?>', '', content)
+                return create_pdf_from_text(text, output_path)
+            except:
+                shutil.copy2(input_path, output_path)
+                return True, f"Page Web {file_extension.upper()} préparée"
             
         elif file_extension in ['epub']:
             shutil.copy2(input_path, output_path)
             return True, "eBook EPUB préparé (conversion PDF en développement)"
             
         else:
-            return False, "Format non supporté"
+            return False, f"Format '{file_extension}' non supporté"
             
     except Exception as e:
         print(f"Erreur de conversion: {e}")
@@ -741,7 +1323,7 @@ def home():
     """Page d'accueil avec informations sur l'API"""
     return jsonify({
         "service": "Convertisseur PDF/Image Sécurisé avec Support Google Drive",
-        "version": "2.7-google-drive",
+        "version": "2.8-docx-fixed",
         "description": "API de conversion de fichiers vers PDF ou Image avec authentification et support Google Drive",
         "endpoints": {
             "health": "/health",
@@ -763,10 +1345,12 @@ def home():
             "advanced_pdf_conversion": ENABLE_ADVANCED_PDF_CONVERSION,
             "text_to_image": ENABLE_TEXT_TO_IMAGE,
             "google_drive": ENABLE_GOOGLE_DRIVE,
+            "docx_conversion": DOCX_AVAILABLE,
             "pil_available": PIL_AVAILABLE,
             "pymupdf_available": PYMUPDF_AVAILABLE,
             "requests_available": REQUESTS_AVAILABLE,
-            "google_api_available": GOOGLE_API_AVAILABLE
+            "google_api_available": GOOGLE_API_AVAILABLE,
+            "reportlab_available": REPORTLAB_AVAILABLE
         }
     })
 
@@ -774,15 +1358,18 @@ def home():
 def health():
     return jsonify({
         "status": "OK",
-        "version": "2.7-google-drive",
-        "features": ["API Key Security", "Public Downloads", "PDF Conversion", "Image Conversion", "URL Conversion", "Google Drive"],
+        "version": "2.8-docx-fixed",
+        "features": ["API Key Security", "Public Downloads", "PDF Conversion", "Image Conversion", "URL Conversion", "Google Drive", "DOCX Support"],
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "total_supported_formats": len(ALLOWED_EXTENSIONS),
         "libraries": {
             "pil_available": PIL_AVAILABLE,
             "pymupdf_available": PYMUPDF_AVAILABLE,
             "requests_available": REQUESTS_AVAILABLE,
-            "google_api_available": GOOGLE_API_AVAILABLE
+            "google_api_available": GOOGLE_API_AVAILABLE,
+            "docx_available": DOCX_AVAILABLE,
+            "pypdf2_available": PYPDF2_AVAILABLE,
+            "reportlab_available": REPORTLAB_AVAILABLE
         },
         "feature_flags": {
             "image_conversion": ENABLE_IMAGE_CONVERSION,
@@ -866,7 +1453,7 @@ def convert_google_drive():
             }), 400
         
         # Sauvegarder temporairement
-        file_extension = filename.rsplit('.', 1)[1].lower() if '.' in filename else 'tmp'
+        file_extension = get_file_extension_safe(filename) or 'tmp'
         
         if file_extension not in ALLOWED_EXTENSIONS:
             return jsonify({
@@ -998,7 +1585,7 @@ def convert_url_to_image():
         if '.' not in filename:
             filename += '.tmp'
         
-        file_extension = filename.rsplit('.', 1)[1].lower() if '.' in filename else 'tmp'
+        file_extension = get_file_extension_safe(filename) or 'tmp'
         
         if file_extension not in ALLOWED_EXTENSIONS:
             return jsonify({
@@ -1119,7 +1706,7 @@ def convert_to_image():
         
         original_name = secure_filename(file.filename)
         base_name = os.path.splitext(original_name)[0]
-        file_extension = original_name.rsplit('.', 1)[1].lower()
+        file_extension = get_file_extension_safe(original_name) or 'tmp'
         
         temp_filename = f"temp_{request_hash}_{unique_id}.{file_extension}"
         temp_path = os.path.join(UPLOAD_FOLDER, temp_filename)
@@ -1128,321 +1715,4 @@ def convert_to_image():
         converted_filename = f"{base_name}_image_{timestamp}_{unique_id}.{target_format}"
         converted_path = os.path.join(CONVERTED_FOLDER, converted_filename)
         
-        if file_extension == 'pdf' and PYMUPDF_AVAILABLE:
-            conversion_success, conversion_message = convert_pdf_to_image_advanced(temp_path, converted_path, target_format, page_num)
-        elif file_extension in ['txt', 'md'] and ENABLE_TEXT_TO_IMAGE:
-            conversion_success, conversion_message = create_text_to_image_advanced(temp_path, converted_path, target_format, width, height)
-        else:
-            conversion_success, conversion_message = enhanced_convert_to_image(temp_path, converted_path, file_extension, target_format)
-        
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        
-        if not conversion_success:
-            return jsonify({"error": f"Échec de la conversion: {conversion_message}"}), 500
-        
-        base_url = request.host_url.rstrip('/')
-        download_url = f"{base_url}/public/download/{converted_filename}"
-        
-        processing_time = round(time.time() - start_time, 3)
-        
-        print(f"✅ Conversion image réussie: {converted_path}")
-        print(f"🔗 URL publique: {download_url}")
-        print(f"⏱️ Temps de traitement: {processing_time}s")
-        
-        return jsonify({
-            "success": True,
-            "filename": converted_filename,
-            "download_url": download_url,
-            "original_format": file_extension,
-            "target_format": target_format,
-            "file_size_mb": round(file_size / (1024 * 1024), 2),
-            "processing_time_seconds": processing_time,
-            "conversion_method": conversion_message,
-            "message": f"Fichier {file_extension.upper()} converti en image {target_format.upper()} avec succès!",
-            "format_category": get_format_category(file_extension),
-            "conversion_type": "file_to_image",
-            "options_used": {
-                "width": width if file_extension in ['txt', 'md'] else None,
-                "height": height if file_extension in ['txt', 'md'] else None,
-                "page": page_num if file_extension == 'pdf' else None
-            }
-        })
-        
-    except Exception as e:
-        print(f"❌ Erreur: {str(e)}")
-        return jsonify({"error": f"Erreur de traitement: {str(e)}"}), 500
-
-@app.route('/convert', methods=['POST'])
-@require_api_key
-def convert():
-    """Route existante pour conversion vers PDF"""
-    start_time = time.time()
-    
-    print("=== REQUÊTE SÉCURISÉE REÇUE ===")
-    print("Method:", request.method)
-    print("Content-Type:", request.content_type)
-    print("Files:", list(request.files.keys()))
-    print("API Key présente:", bool(request.headers.get('X-API-Key') or request.args.get('api_key') or request.form.get('api_key')))
-    
-    if 'file' not in request.files:
-        return jsonify({"error": "Pas de fichier fourni"}), 400
-    
-    file = request.files['file']
-    
-    if file.filename == '':
-        return jsonify({"error": "Nom de fichier vide"}), 400
-    
-    file_size = get_file_size(file)
-    if file_size > MAX_FILE_SIZE:
-        return jsonify({
-            "error": "Fichier trop volumineux",
-            "max_size_mb": MAX_FILE_SIZE / (1024 * 1024),
-            "file_size_mb": round(file_size / (1024 * 1024), 2)
-        }), 413
-    
-    if not allowed_file(file.filename):
-        return jsonify({
-            "error": "Format de fichier non supporté",
-            "supported_formats": sorted(list(ALLOWED_EXTENSIONS)),
-            "hint": "Formats acceptés: Documents (doc, docx, gdoc, pdf, txt), Images (png, jpg, gif), Tableurs (xlsx, csv), Présentations (ppt, pptx), et plus..."
-        }), 400
-    
-    try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = str(uuid.uuid4())[:8]
-        request_hash = hashlib.md5(f"{file.filename}{timestamp}".encode()).hexdigest()[:8]
-        
-        original_name = secure_filename(file.filename)
-        base_name = os.path.splitext(original_name)[0]
-        file_extension = original_name.rsplit('.', 1)[1].lower()
-        
-        temp_filename = f"temp_{request_hash}_{unique_id}.{file_extension}"
-        temp_path = os.path.join(UPLOAD_FOLDER, temp_filename)
-        file.save(temp_path)
-        
-        converted_filename = f"{base_name}_converted_{timestamp}_{unique_id}.pdf"
-        converted_path = os.path.join(CONVERTED_FOLDER, converted_filename)
-        
-        conversion_success, conversion_message = enhanced_convert_file(temp_path, converted_path, file_extension)
-        
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        
-        if not conversion_success:
-            return jsonify({"error": f"Échec de la conversion: {conversion_message}"}), 500
-        
-        base_url = request.host_url.rstrip('/')
-        download_url = f"{base_url}/public/download/{converted_filename}"
-        
-        processing_time = round(time.time() - start_time, 3)
-        
-        print(f"✅ Conversion réussie: {converted_path}")
-        print(f"🔗 URL publique: {download_url}")
-        print(f"⏱️ Temps de traitement: {processing_time}s")
-        
-        return jsonify({
-            "success": True,
-            "filename": converted_filename,
-            "download_url": download_url,
-            "original_format": file_extension,
-            "file_size_mb": round(file_size / (1024 * 1024), 2),
-            "processing_time_seconds": processing_time,
-            "conversion_method": conversion_message,
-            "message": f"Fichier {file_extension.upper()} traité avec succès!",
-            "format_category": get_format_category(file_extension),
-            "security_note": "URL publique permanente - aucune authentification requise pour le téléchargement"
-        })
-        
-    except Exception as e:
-        print(f"❌ Erreur: {str(e)}")
-        return jsonify({"error": f"Erreur de traitement: {str(e)}"}), 500
-
-@app.route('/metrics')
-@require_api_key
-def metrics():
-    """Endpoint de métriques pour monitoring"""
-    try:
-        uploaded_files = len(os.listdir(UPLOAD_FOLDER)) if os.path.exists(UPLOAD_FOLDER) else 0
-        converted_files = len(os.listdir(CONVERTED_FOLDER)) if os.path.exists(CONVERTED_FOLDER) else 0
-        
-        upload_size = sum(os.path.getsize(os.path.join(UPLOAD_FOLDER, f)) 
-                         for f in os.listdir(UPLOAD_FOLDER) 
-                         if os.path.isfile(os.path.join(UPLOAD_FOLDER, f))) if os.path.exists(UPLOAD_FOLDER) else 0
-        
-        converted_size = sum(os.path.getsize(os.path.join(CONVERTED_FOLDER, f)) 
-                            for f in os.listdir(CONVERTED_FOLDER) 
-                            if os.path.isfile(os.path.join(CONVERTED_FOLDER, f))) if os.path.exists(CONVERTED_FOLDER) else 0
-        
-        return jsonify({
-            "status": "active",
-            "version": "2.7-google-drive",
-            "timestamp": datetime.now().isoformat(),
-            "files": {
-                "uploaded_count": uploaded_files,
-                "converted_count": converted_files,
-                "upload_folder_size_mb": round(upload_size / (1024 * 1024), 2),
-                "converted_folder_size_mb": round(converted_size / (1024 * 1024), 2),
-                "total_size_mb": round((upload_size + converted_size) / (1024 * 1024), 2)
-            },
-            "features": {
-                "image_conversion": ENABLE_IMAGE_CONVERSION,
-                "advanced_pdf_conversion": ENABLE_ADVANCED_PDF_CONVERSION,
-                "text_to_image": ENABLE_TEXT_TO_IMAGE,
-                "google_drive": ENABLE_GOOGLE_DRIVE
-            },
-            "libraries": {
-                "pil_available": PIL_AVAILABLE,
-                "pymupdf_available": PYMUPDF_AVAILABLE,
-                "requests_available": REQUESTS_AVAILABLE,
-                "google_api_available": GOOGLE_API_AVAILABLE
-            },
-            "google_drive": {
-                "service_ready": google_drive_service is not None,
-                "service_account_file_exists": os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE)
-            },
-            "limits": {
-                "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
-                "supported_formats_count": len(ALLOWED_EXTENSIONS)
-            }
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/public/download/<filename>')
-def public_download(filename):
-    """Route publique pour télécharger les fichiers convertis"""
-    try:
-        return send_from_directory(CONVERTED_FOLDER, filename, as_attachment=True)
-    except FileNotFoundError:
-        return jsonify({"error": "Fichier non trouvé"}), 404
-
-@app.route('/formats')
-def supported_formats():
-    """Liste détaillée des formats supportés"""
-    formats_by_category = {
-        "documents": ["pdf", "doc", "docx", "gdoc", "odt", "pages", "txt", "rtf", "md"],
-        "images": ["png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "webp", "svg", "ico"],
-        "spreadsheets": ["csv", "xlsx", "xls", "ods", "numbers"],
-        "presentations": ["ppt", "pptx", "odp", "key"],
-        "web": ["html", "htm"],
-        "ebooks": ["epub"]
-    }
-    
-    return jsonify({
-        "supported_formats": sorted(list(ALLOWED_EXTENSIONS)),
-        "formats_by_category": formats_by_category,
-        "total_formats": len(ALLOWED_EXTENSIONS),
-        "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
-        "description": "Convertisseur de fichiers sécurisé vers PDF et Image - Support étendu avec Google Drive",
-        "security": "Clé API requise pour upload, téléchargements publics",
-        "version": "2.7-google-drive",
-        "new_features": [
-            "🆕 Support Google Drive - téléchargement et conversion directe",
-            "🆕 Extraction automatique des IDs Google Drive",
-            "🆕 Support des liens de partage Google Drive",
-            "Conversion d'URL vers image pour n8n",
-            "Support PIL/Pillow pour vraies conversions d'images",
-            "PyMuPDF pour conversion PDF vers image",
-            "Conversion texte vers image avec rendu",
-            "Feature flags pour déploiement progressif",
-            "Gestion améliorée des fichiers GDOC avec nettoyage JSON",
-            "Mise en forme avancée avec polices plus grandes et espacement",
-            "Surlignage intelligent des titres et listes"
-        ],
-        "google_drive_support": {
-            "enabled": ENABLE_GOOGLE_DRIVE,
-            "service_ready": google_drive_service is not None,
-            "supported_urls": [
-                "https://drive.google.com/file/d/FILE_ID/view",
-                "https://drive.google.com/open?id=FILE_ID",
-                "https://drive.google.com/uc?id=FILE_ID",
-                "Direct file ID"
-            ]
-        }
-    })
-
-@app.route('/status')
-@require_api_key
-def status():
-    """Statut détaillé pour les utilisateurs authentifiés"""
-    try:
-        uploaded_files = len(os.listdir(UPLOAD_FOLDER)) if os.path.exists(UPLOAD_FOLDER) else 0
-        converted_files = len(os.listdir(CONVERTED_FOLDER)) if os.path.exists(CONVERTED_FOLDER) else 0
-        
-        return jsonify({
-            "status": "Active",
-            "version": "2.7-google-drive",
-            "files_in_upload": uploaded_files,
-            "files_converted": converted_files,
-            "supported_formats_count": len(ALLOWED_EXTENSIONS),
-            "uptime": "Depuis le dernier déploiement",
-            "security": "Upload protégé par clé API - Téléchargements publics",
-            "features": {
-                "image_conversion": ENABLE_IMAGE_CONVERSION,
-                "advanced_pdf_conversion": ENABLE_ADVANCED_PDF_CONVERSION,
-                "text_to_image": ENABLE_TEXT_TO_IMAGE,
-                "url_conversion": True,
-                "google_drive": ENABLE_GOOGLE_DRIVE
-            },
-            "libraries": {
-                "pil_available": PIL_AVAILABLE,
-                "pymupdf_available": PYMUPDF_AVAILABLE,
-                "requests_available": REQUESTS_AVAILABLE,
-                "google_api_available": GOOGLE_API_AVAILABLE
-            },
-            "google_drive_status": {
-                "enabled": ENABLE_GOOGLE_DRIVE,
-                "service_ready": google_drive_service is not None,
-                "service_account_configured": os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE),
-                "api_available": GOOGLE_API_AVAILABLE
-            }
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 8080))
-    
-    if API_KEY == 'votre-cle-secrete-changez-moi':
-        print("⚠️  ATTENTION: Utilisez une vraie clé API en production!")
-        print("   Définissez la variable d'environnement PDF_API_KEY")
-    
-    print(f"🚀 Serveur PDF/Image Enhanced v2.7-google-drive démarré sur le port {port}")
-    print(f"🔑 Clé API requise pour uploads: {'***' + API_KEY[-4:] if len(API_KEY) > 4 else '****'}")
-    print(f"📁 Formats supportés: {len(ALLOWED_EXTENSIONS)} types de fichiers")
-    print(f"🌍 Téléchargements publics: /public/download/<filename>")
-    print(f"🎯 Feature Flags:")
-    print(f"   - Image Conversion: {ENABLE_IMAGE_CONVERSION}")
-    print(f"   - Advanced PDF Conversion: {ENABLE_ADVANCED_PDF_CONVERSION}")
-    print(f"   - Text to Image: {ENABLE_TEXT_TO_IMAGE}")
-    print(f"   - 🆕 Google Drive: {ENABLE_GOOGLE_DRIVE}")
-    print(f"📚 Bibliothèques:")
-    print(f"   - PIL/Pillow: {'✅' if PIL_AVAILABLE else '❌'}")
-    print(f"   - PyMuPDF: {'✅' if PYMUPDF_AVAILABLE else '❌'}")
-    print(f"   - Requests: {'✅' if REQUESTS_AVAILABLE else '❌'}")
-    print(f"   - 🆕 Google API: {'✅' if GOOGLE_API_AVAILABLE else '❌'}")
-    print(f"🔗 Endpoints principaux:")
-    print(f"   - POST /convert (PDF)")
-    print(f"   - POST /convert-to-image (Image)")
-    print(f"   - POST /convert-url-to-image (URL pour n8n)")
-    print(f"   - 🆕 POST /convert-google-drive (Google Drive)")
-    print(f"   - GET /test-pil (test PIL)")
-    print(f"   - GET /metrics (monitoring)")
-    
-    if ENABLE_GOOGLE_DRIVE:
-        print(f"📋 Configuration Google Drive:")
-        print(f"   - Service Account: {'✅ Configuré' if os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE) else '❌ Manquant'}")
-        print(f"   - Service Ready: {'✅' if google_drive_service else '❌'}")
-        if not os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE):
-            print(f"   ⚠️  Créez un fichier service-account.json pour activer Google Drive")
-            print(f"   ⚠️  Ou définissez GOOGLE_SERVICE_ACCOUNT_FILE")
-    
-    print(f"🎨 Améliorations v2.7:")
-    print(f"   - Support complet Google Drive")
-    print(f"   - Téléchargement depuis liens de partage")
-    print(f"   - Conversion directe Google Drive vers PDF/Image")
-    print(f"   - Détection automatique des URLs Google Drive")
-    print(f"   - Toutes les fonctionnalités v2.6 conservées")
-    
-    app.run(host='0.0.0.0', port=port, debug=False)
+        if file_extension == 'pdf'
