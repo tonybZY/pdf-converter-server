@@ -10,8 +10,10 @@ import hashlib
 import time
 import io
 import json
+import re
+from urllib.parse import urlparse, parse_qs
 
-# Nouvelles imports pour conversion d'images
+# Imports pour conversion d'images
 try:
     from PIL import Image, ImageDraw, ImageFont
     PIL_AVAILABLE = True
@@ -33,6 +35,16 @@ except ImportError:
     REQUESTS_AVAILABLE = False
     print("⚠️  Requests non disponible - conversion URL limitée")
 
+# Imports pour Google Drive
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload
+    GOOGLE_API_AVAILABLE = True
+except ImportError:
+    GOOGLE_API_AVAILABLE = False
+    print("⚠️  Google API non disponible - téléchargement Google Drive limité")
+
 app = Flask(__name__)
 CORS(app)
 
@@ -42,10 +54,15 @@ UPLOAD_FOLDER = 'uploads'
 CONVERTED_FOLDER = 'converted'
 MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB max
 
+# Configuration Google Drive
+GOOGLE_SERVICE_ACCOUNT_FILE = os.environ.get('GOOGLE_SERVICE_ACCOUNT_FILE', 'service-account.json')
+GOOGLE_DRIVE_FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID', '')
+
 # Feature Flags pour déploiement progressif
 ENABLE_IMAGE_CONVERSION = os.environ.get('ENABLE_IMAGE_CONVERSION', 'true').lower() == 'true'
 ENABLE_ADVANCED_PDF_CONVERSION = os.environ.get('ENABLE_ADVANCED_PDF_CONVERSION', 'true').lower() == 'true'
 ENABLE_TEXT_TO_IMAGE = os.environ.get('ENABLE_TEXT_TO_IMAGE', 'true').lower() == 'true'
+ENABLE_GOOGLE_DRIVE = os.environ.get('ENABLE_GOOGLE_DRIVE', 'true').lower() == 'true'
 
 # Créer les dossiers
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -61,6 +78,19 @@ ALLOWED_EXTENSIONS = {
     'tiff', 'tif', 'webp', 'svg', 'ico',
     'html', 'htm', 'epub', 'md'
 }
+
+# Service Google Drive
+google_drive_service = None
+if GOOGLE_API_AVAILABLE and ENABLE_GOOGLE_DRIVE and os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE):
+    try:
+        credentials = service_account.Credentials.from_service_account_file(
+            GOOGLE_SERVICE_ACCOUNT_FILE,
+            scopes=['https://www.googleapis.com/auth/drive.readonly']
+        )
+        google_drive_service = build('drive', 'v3', credentials=credentials)
+        print("✅ Service Google Drive initialisé")
+    except Exception as e:
+        print(f"❌ Erreur initialisation Google Drive: {e}")
 
 def require_api_key(f):
     """Décorateur pour vérifier la clé API"""
@@ -93,14 +123,82 @@ def get_file_size(file):
     file.seek(0)
     return size
 
+def extract_google_drive_id(url):
+    """Extrait l'ID du fichier Google Drive depuis une URL"""
+    patterns = [
+        r'/file/d/([a-zA-Z0-9-_]+)',
+        r'id=([a-zA-Z0-9-_]+)',
+        r'/open\?id=([a-zA-Z0-9-_]+)',
+        r'/uc\?id=([a-zA-Z0-9-_]+)',
+        r'^([a-zA-Z0-9-_]+)$'  # ID direct
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+def download_google_drive_file(file_id):
+    """Télécharge un fichier depuis Google Drive"""
+    if not google_drive_service:
+        return None, None, "Service Google Drive non disponible"
+    
+    try:
+        # Obtenir les métadonnées du fichier
+        file_metadata = google_drive_service.files().get(
+            fileId=file_id,
+            fields='name,size,mimeType'
+        ).execute()
+        
+        filename = file_metadata.get('name', 'unknown')
+        file_size = int(file_metadata.get('size', 0))
+        mime_type = file_metadata.get('mimeType', '')
+        
+        # Vérifier la taille
+        if file_size > MAX_FILE_SIZE:
+            return None, None, f"Fichier trop volumineux ({file_size / (1024*1024):.2f} MB)"
+        
+        # Déterminer l'extension
+        if '.' not in filename:
+            mime_to_ext = {
+                'application/pdf': '.pdf',
+                'image/png': '.png',
+                'image/jpeg': '.jpg',
+                'text/plain': '.txt',
+                'application/vnd.google-apps.document': '.gdoc',
+                'application/vnd.google-apps.spreadsheet': '.gsheet',
+                'application/vnd.google-apps.presentation': '.gslides'
+            }
+            ext = mime_to_ext.get(mime_type, '')
+            if ext:
+                filename += ext
+        
+        # Télécharger le fichier
+        request_file = google_drive_service.files().get_media(fileId=file_id)
+        file_content = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_content, request_file)
+        
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+            if status:
+                print(f"Téléchargement: {int(status.progress() * 100)}%")
+        
+        file_content.seek(0)
+        return file_content, filename, None
+        
+    except Exception as e:
+        return None, None, f"Erreur téléchargement Google Drive: {str(e)}"
+
 def convert_text_to_pdf(input_path, output_path):
     """Convertit un fichier texte en PDF simple"""
     try:
         with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
         
-        pdf_content = f"""
-%PDF-1.4
+        # PDF basique - version corrigée
+        pdf_content = f"""%PDF-1.4
 1 0 obj
 <<
 /Type /Catalog
@@ -133,7 +231,7 @@ stream
 BT
 /F1 12 Tf
 50 750 Td
-({content[:500]}) Tj
+({content[:500].replace('(', '\\(').replace(')', '\\)').replace('\\', '\\\\')}) Tj
 ET
 endstream
 endobj
@@ -152,11 +250,10 @@ trailer
 >>
 startxref
 {300 + len(content)}
-%%EOF
-"""
+%%EOF"""
         
-        with open(output_path, 'w') as f:
-            f.write(pdf_content)
+        with open(output_path, 'wb') as f:
+            f.write(pdf_content.encode('latin-1', errors='ignore'))
         
         return True
     except Exception as e:
@@ -266,7 +363,7 @@ def create_placeholder_image(output_path, text, format='png'):
 def create_document_image_advanced(text_content, output_path, doc_type, target_format='png'):
     """Création d'image avancée pour documents - VERSION AMÉLIORÉE"""
     if not PIL_AVAILABLE:
-        return create_placeholder_image(output_path, f"{doc_type}\nPIL non disponible", target_format)
+        return create_placeholder_image(output_path, f"{doc_type}\nPIL non disponible", target_format), "PIL non disponible"
     
     try:
         # Image plus grande pour meilleure lisibilité
@@ -394,7 +491,7 @@ def create_document_image_advanced(text_content, output_path, doc_type, target_f
         
     except Exception as e:
         print(f"Erreur création image avancée: {e}")
-        return create_placeholder_image(output_path, f"{doc_type}\nERREUR", target_format), True
+        return create_placeholder_image(output_path, f"{doc_type}\nERREUR", target_format), "Erreur création image"
 
 def convert_gdoc_to_image(input_path, output_path, target_format='png'):
     """Conversion spéciale pour fichiers Google Docs"""
@@ -407,16 +504,16 @@ def convert_gdoc_to_image(input_path, output_path, target_format='png'):
         if PIL_AVAILABLE:
             return create_document_image_advanced(content, output_path, "Google Doc", target_format)
         else:
-            return create_placeholder_image(output_path, "GDOC\nPIL non disponible", target_format), True
+            return create_placeholder_image(output_path, "GDOC\nPIL non disponible", target_format), "PIL non disponible"
             
     except Exception as e:
         print(f"Erreur conversion GDOC: {e}")
-        return create_placeholder_image(output_path, "GDOC\nERREUR", target_format), True
+        return create_placeholder_image(output_path, "GDOC\nERREUR", target_format), "Erreur conversion GDOC"
 
 def create_text_to_image_advanced(input_path, output_path, target_format='png', width=800, height=600):
     """Conversion avancée de texte vers image avec PIL"""
     if not PIL_AVAILABLE or not ENABLE_TEXT_TO_IMAGE:
-        return create_placeholder_image(output_path, "TEXT", target_format), True
+        return create_placeholder_image(output_path, "TEXT", target_format), "PIL non disponible"
     
     try:
         with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -450,12 +547,12 @@ def create_text_to_image_advanced(input_path, output_path, target_format='png', 
         
     except Exception as e:
         print(f"Erreur conversion texte avancée: {e}")
-        return create_placeholder_image(output_path, "TEXT", target_format), True
+        return create_placeholder_image(output_path, "TEXT", target_format), f"Erreur: {str(e)}"
 
 def convert_pdf_to_image_advanced(input_path, output_path, target_format='png', page_num=0):
     """Conversion avancée de PDF vers image avec PyMuPDF"""
     if not PYMUPDF_AVAILABLE or not ENABLE_ADVANCED_PDF_CONVERSION:
-        return create_placeholder_image(output_path, "PDF", target_format), True
+        return create_placeholder_image(output_path, "PDF", target_format), "PyMuPDF non disponible"
     
     try:
         pdf_document = fitz.open(input_path)
@@ -482,7 +579,7 @@ def convert_pdf_to_image_advanced(input_path, output_path, target_format='png', 
         
     except Exception as e:
         print(f"Erreur conversion PDF avancée: {e}")
-        return create_placeholder_image(output_path, "PDF", target_format), True
+        return create_placeholder_image(output_path, "PDF", target_format), f"Erreur: {str(e)}"
 
 def convert_image_format(input_path, output_path, target_format='png'):
     """Conversion entre formats d'images avec PIL"""
@@ -534,7 +631,7 @@ def enhanced_convert_to_image(input_path, output_path, file_extension, target_fo
                     content = f.read()[:500]
                 return create_document_image_advanced(content, output_path, f"Document {file_extension.upper()}", target_format)
             except:
-                return create_placeholder_image(output_path, f"DOC\n{file_extension.upper()}", target_format), True
+                return create_placeholder_image(output_path, f"DOC\n{file_extension.upper()}", target_format), "Erreur lecture fichier"
             
         elif file_extension in ['doc', 'docx', 'odt', 'pages']:
             try:
@@ -542,10 +639,10 @@ def enhanced_convert_to_image(input_path, output_path, file_extension, target_fo
                     content = f.read()[:1000].decode('utf-8', errors='ignore')
                 return create_document_image_advanced(content, output_path, f"Document {file_extension.upper()}", target_format)
             except:
-                return create_placeholder_image(output_path, f"DOC\n{file_extension.upper()}", target_format), True
+                return create_placeholder_image(output_path, f"DOC\n{file_extension.upper()}", target_format), "Erreur lecture fichier"
             
         else:
-            return create_placeholder_image(output_path, f"FORMAT\n{file_extension.upper()}", target_format), True
+            return create_placeholder_image(output_path, f"FORMAT\n{file_extension.upper()}", target_format), "Format non supporté"
             
     except Exception as e:
         print(f"Erreur de conversion image: {e}")
@@ -643,15 +740,16 @@ def get_format_category(extension):
 def home():
     """Page d'accueil avec informations sur l'API"""
     return jsonify({
-        "service": "Convertisseur PDF/Image Sécurisé",
-        "version": "2.6-enhanced-final",
-        "description": "API de conversion de fichiers vers PDF ou Image avec authentification",
+        "service": "Convertisseur PDF/Image Sécurisé avec Support Google Drive",
+        "version": "2.7-google-drive",
+        "description": "API de conversion de fichiers vers PDF ou Image avec authentification et support Google Drive",
         "endpoints": {
             "health": "/health",
             "formats": "/formats", 
             "convert": "POST /convert (nécessite clé API) - Conversion vers PDF",
             "convert_to_image": "POST /convert-to-image (nécessite clé API) - Conversion vers Image",
             "convert_url_to_image": "POST /convert-url-to-image (nécessite clé API) - URL vers Image pour n8n",
+            "convert_google_drive": "POST /convert-google-drive (nécessite clé API) - Google Drive vers PDF/Image",
             "public_download": "/public/download/<filename> (AUCUNE authentification requise)",
             "status": "/status (nécessite clé API)",
             "metrics": "/metrics (nécessite clé API)",
@@ -664,9 +762,11 @@ def home():
             "image_conversion": ENABLE_IMAGE_CONVERSION,
             "advanced_pdf_conversion": ENABLE_ADVANCED_PDF_CONVERSION,
             "text_to_image": ENABLE_TEXT_TO_IMAGE,
+            "google_drive": ENABLE_GOOGLE_DRIVE,
             "pil_available": PIL_AVAILABLE,
             "pymupdf_available": PYMUPDF_AVAILABLE,
-            "requests_available": REQUESTS_AVAILABLE
+            "requests_available": REQUESTS_AVAILABLE,
+            "google_api_available": GOOGLE_API_AVAILABLE
         }
     })
 
@@ -674,20 +774,23 @@ def home():
 def health():
     return jsonify({
         "status": "OK",
-        "version": "2.6-enhanced-final",
-        "features": ["API Key Security", "Public Downloads", "PDF Conversion", "Image Conversion", "URL Conversion"],
+        "version": "2.7-google-drive",
+        "features": ["API Key Security", "Public Downloads", "PDF Conversion", "Image Conversion", "URL Conversion", "Google Drive"],
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
         "total_supported_formats": len(ALLOWED_EXTENSIONS),
         "libraries": {
             "pil_available": PIL_AVAILABLE,
             "pymupdf_available": PYMUPDF_AVAILABLE,
-            "requests_available": REQUESTS_AVAILABLE
+            "requests_available": REQUESTS_AVAILABLE,
+            "google_api_available": GOOGLE_API_AVAILABLE
         },
         "feature_flags": {
             "image_conversion": ENABLE_IMAGE_CONVERSION,
             "advanced_pdf_conversion": ENABLE_ADVANCED_PDF_CONVERSION,
-            "text_to_image": ENABLE_TEXT_TO_IMAGE
-        }
+            "text_to_image": ENABLE_TEXT_TO_IMAGE,
+            "google_drive": ENABLE_GOOGLE_DRIVE
+        },
+        "google_drive_ready": google_drive_service is not None
     })
 
 @app.route('/test-pil')
@@ -714,10 +817,141 @@ def test_pil():
             "error": str(e)
         })
 
+@app.route('/convert-google-drive', methods=['POST'])
+@require_api_key
+def convert_google_drive():
+    """Nouvelle route pour conversion depuis Google Drive"""
+    start_time = time.time()
+    
+    if not ENABLE_GOOGLE_DRIVE or not google_drive_service:
+        return jsonify({
+            "error": "Service Google Drive non disponible",
+            "message": "Google Drive désactivé ou non configuré"
+        }), 503
+    
+    print("=== REQUÊTE GOOGLE DRIVE REÇUE ===")
+    
+    # Récupérer les paramètres
+    data = request.get_json() if request.is_json else request.form
+    google_drive_url = data.get('url') or data.get('google_drive_url')
+    output_format = data.get('format', 'pdf').lower()
+    conversion_type = data.get('type', 'pdf').lower()  # 'pdf' ou 'image'
+    
+    if not google_drive_url:
+        return jsonify({
+            "error": "URL Google Drive manquante",
+            "parameter": "url ou google_drive_url"
+        }), 400
+    
+    # Extraire l'ID du fichier
+    file_id = extract_google_drive_id(google_drive_url)
+    if not file_id:
+        return jsonify({
+            "error": "URL Google Drive invalide",
+            "message": "Impossible d'extraire l'ID du fichier",
+            "url": google_drive_url
+        }), 400
+    
+    try:
+        print(f"📥 Téléchargement depuis Google Drive: {file_id}")
+        
+        # Télécharger le fichier
+        file_content, filename, error = download_google_drive_file(file_id)
+        
+        if error:
+            return jsonify({
+                "error": "Échec du téléchargement Google Drive",
+                "message": error,
+                "file_id": file_id
+            }), 400
+        
+        # Sauvegarder temporairement
+        file_extension = filename.rsplit('.', 1)[1].lower() if '.' in filename else 'tmp'
+        
+        if file_extension not in ALLOWED_EXTENSIONS:
+            return jsonify({
+                "error": "Format de fichier non supporté",
+                "detected_format": file_extension,
+                "filename": filename,
+                "supported_formats": sorted(list(ALLOWED_EXTENSIONS))
+            }), 400
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        
+        temp_filename = f"temp_gdrive_{unique_id}.{file_extension}"
+        temp_path = os.path.join(UPLOAD_FOLDER, temp_filename)
+        
+        with open(temp_path, 'wb') as f:
+            f.write(file_content.getvalue())
+        
+        # Conversion selon le type demandé
+        base_name = os.path.splitext(filename)[0]
+        
+        if conversion_type == 'image':
+            # Conversion vers image
+            if output_format not in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']:
+                output_format = 'png'
+                
+            converted_filename = f"{base_name}_gdrive_image_{timestamp}_{unique_id}.{output_format}"
+            converted_path = os.path.join(CONVERTED_FOLDER, converted_filename)
+            
+            conversion_success, conversion_message = enhanced_convert_to_image(
+                temp_path, converted_path, file_extension, output_format
+            )
+        else:
+            # Conversion vers PDF
+            converted_filename = f"{base_name}_gdrive_converted_{timestamp}_{unique_id}.pdf"
+            converted_path = os.path.join(CONVERTED_FOLDER, converted_filename)
+            
+            conversion_success, conversion_message = enhanced_convert_file(
+                temp_path, converted_path, file_extension
+            )
+        
+        # Nettoyer le fichier temporaire
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        
+        if not conversion_success:
+            return jsonify({
+                "error": f"Échec de la conversion: {conversion_message}"
+            }), 500
+        
+        # URL de téléchargement
+        base_url = request.host_url.rstrip('/')
+        download_url = f"{base_url}/public/download/{converted_filename}"
+        
+        processing_time = round(time.time() - start_time, 3)
+        
+        print(f"✅ Conversion Google Drive réussie: {converted_path}")
+        print(f"🔗 URL publique: {download_url}")
+        print(f"⏱️ Temps de traitement: {processing_time}s")
+        
+        return jsonify({
+            "success": True,
+            "filename": converted_filename,
+            "download_url": download_url,
+            "original_filename": filename,
+            "google_drive_id": file_id,
+            "original_format": file_extension,
+            "output_format": output_format if conversion_type == 'image' else 'pdf',
+            "conversion_type": conversion_type,
+            "processing_time_seconds": processing_time,
+            "conversion_method": conversion_message,
+            "message": f"Fichier Google Drive converti avec succès!",
+            "format_category": get_format_category(file_extension)
+        })
+        
+    except Exception as e:
+        print(f"❌ Erreur Google Drive: {str(e)}")
+        return jsonify({
+            "error": f"Erreur de traitement: {str(e)}"
+        }), 500
+
 @app.route('/convert-url-to-image', methods=['POST'])
 @require_api_key
 def convert_url_to_image():
-    """Nouvelle route pour n8n - conversion d'URL de fichier vers image"""
+    """Route existante pour n8n - conversion d'URL de fichier vers image"""
     start_time = time.time()
     
     if not ENABLE_IMAGE_CONVERSION:
@@ -739,6 +973,11 @@ def convert_url_to_image():
     
     if not file_url:
         return jsonify({"error": "URL du fichier manquante", "parameter": "url"}), 400
+    
+    # Vérifier si c'est une URL Google Drive
+    if 'drive.google.com' in file_url or 'docs.google.com' in file_url:
+        # Rediriger vers la route Google Drive
+        return convert_google_drive()
     
     if target_format.lower() not in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']:
         target_format = 'png'
@@ -1037,7 +1276,7 @@ def metrics():
         
         return jsonify({
             "status": "active",
-            "version": "2.6-enhanced-final",
+            "version": "2.7-google-drive",
             "timestamp": datetime.now().isoformat(),
             "files": {
                 "uploaded_count": uploaded_files,
@@ -1049,12 +1288,18 @@ def metrics():
             "features": {
                 "image_conversion": ENABLE_IMAGE_CONVERSION,
                 "advanced_pdf_conversion": ENABLE_ADVANCED_PDF_CONVERSION,
-                "text_to_image": ENABLE_TEXT_TO_IMAGE
+                "text_to_image": ENABLE_TEXT_TO_IMAGE,
+                "google_drive": ENABLE_GOOGLE_DRIVE
             },
             "libraries": {
                 "pil_available": PIL_AVAILABLE,
                 "pymupdf_available": PYMUPDF_AVAILABLE,
-                "requests_available": REQUESTS_AVAILABLE
+                "requests_available": REQUESTS_AVAILABLE,
+                "google_api_available": GOOGLE_API_AVAILABLE
+            },
+            "google_drive": {
+                "service_ready": google_drive_service is not None,
+                "service_account_file_exists": os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE)
             },
             "limits": {
                 "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
@@ -1089,10 +1334,13 @@ def supported_formats():
         "formats_by_category": formats_by_category,
         "total_formats": len(ALLOWED_EXTENSIONS),
         "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
-        "description": "Convertisseur de fichiers sécurisé vers PDF et Image - Support étendu",
+        "description": "Convertisseur de fichiers sécurisé vers PDF et Image - Support étendu avec Google Drive",
         "security": "Clé API requise pour upload, téléchargements publics",
-        "version": "2.6-enhanced-final",
+        "version": "2.7-google-drive",
         "new_features": [
+            "🆕 Support Google Drive - téléchargement et conversion directe",
+            "🆕 Extraction automatique des IDs Google Drive",
+            "🆕 Support des liens de partage Google Drive",
             "Conversion d'URL vers image pour n8n",
             "Support PIL/Pillow pour vraies conversions d'images",
             "PyMuPDF pour conversion PDF vers image",
@@ -1101,7 +1349,17 @@ def supported_formats():
             "Gestion améliorée des fichiers GDOC avec nettoyage JSON",
             "Mise en forme avancée avec polices plus grandes et espacement",
             "Surlignage intelligent des titres et listes"
-        ]
+        ],
+        "google_drive_support": {
+            "enabled": ENABLE_GOOGLE_DRIVE,
+            "service_ready": google_drive_service is not None,
+            "supported_urls": [
+                "https://drive.google.com/file/d/FILE_ID/view",
+                "https://drive.google.com/open?id=FILE_ID",
+                "https://drive.google.com/uc?id=FILE_ID",
+                "Direct file ID"
+            ]
+        }
     })
 
 @app.route('/status')
@@ -1114,7 +1372,7 @@ def status():
         
         return jsonify({
             "status": "Active",
-            "version": "2.6-enhanced-final",
+            "version": "2.7-google-drive",
             "files_in_upload": uploaded_files,
             "files_converted": converted_files,
             "supported_formats_count": len(ALLOWED_EXTENSIONS),
@@ -1124,12 +1382,20 @@ def status():
                 "image_conversion": ENABLE_IMAGE_CONVERSION,
                 "advanced_pdf_conversion": ENABLE_ADVANCED_PDF_CONVERSION,
                 "text_to_image": ENABLE_TEXT_TO_IMAGE,
-                "url_conversion": True
+                "url_conversion": True,
+                "google_drive": ENABLE_GOOGLE_DRIVE
             },
             "libraries": {
                 "pil_available": PIL_AVAILABLE,
                 "pymupdf_available": PYMUPDF_AVAILABLE,
-                "requests_available": REQUESTS_AVAILABLE
+                "requests_available": REQUESTS_AVAILABLE,
+                "google_api_available": GOOGLE_API_AVAILABLE
+            },
+            "google_drive_status": {
+                "enabled": ENABLE_GOOGLE_DRIVE,
+                "service_ready": google_drive_service is not None,
+                "service_account_configured": os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE),
+                "api_available": GOOGLE_API_AVAILABLE
             }
         })
     except Exception as e:
@@ -1142,7 +1408,7 @@ if __name__ == "__main__":
         print("⚠️  ATTENTION: Utilisez une vraie clé API en production!")
         print("   Définissez la variable d'environnement PDF_API_KEY")
     
-    print(f"🚀 Serveur PDF/Image Enhanced v2.6-final démarré sur le port {port}")
+    print(f"🚀 Serveur PDF/Image Enhanced v2.7-google-drive démarré sur le port {port}")
     print(f"🔑 Clé API requise pour uploads: {'***' + API_KEY[-4:] if len(API_KEY) > 4 else '****'}")
     print(f"📁 Formats supportés: {len(ALLOWED_EXTENSIONS)} types de fichiers")
     print(f"🌍 Téléchargements publics: /public/download/<filename>")
@@ -1150,21 +1416,33 @@ if __name__ == "__main__":
     print(f"   - Image Conversion: {ENABLE_IMAGE_CONVERSION}")
     print(f"   - Advanced PDF Conversion: {ENABLE_ADVANCED_PDF_CONVERSION}")
     print(f"   - Text to Image: {ENABLE_TEXT_TO_IMAGE}")
+    print(f"   - 🆕 Google Drive: {ENABLE_GOOGLE_DRIVE}")
     print(f"📚 Bibliothèques:")
     print(f"   - PIL/Pillow: {'✅' if PIL_AVAILABLE else '❌'}")
     print(f"   - PyMuPDF: {'✅' if PYMUPDF_AVAILABLE else '❌'}")
     print(f"   - Requests: {'✅' if REQUESTS_AVAILABLE else '❌'}")
+    print(f"   - 🆕 Google API: {'✅' if GOOGLE_API_AVAILABLE else '❌'}")
     print(f"🔗 Endpoints principaux:")
     print(f"   - POST /convert (PDF)")
     print(f"   - POST /convert-to-image (Image)")
     print(f"   - POST /convert-url-to-image (URL pour n8n)")
+    print(f"   - 🆕 POST /convert-google-drive (Google Drive)")
     print(f"   - GET /test-pil (test PIL)")
     print(f"   - GET /metrics (monitoring)")
-    print(f"🎨 Améliorations v2.6:")
-    print(f"   - Polices plus grandes (16px → 32px pour titres)")
-    print(f"   - Espacement amélioré (22px entre lignes)")
-    print(f"   - Nettoyage intelligent du JSON GDOC")
-    print(f"   - Surlignage des titres et listes")
-    print(f"   - Footer avec statistiques du document")
+    
+    if ENABLE_GOOGLE_DRIVE:
+        print(f"📋 Configuration Google Drive:")
+        print(f"   - Service Account: {'✅ Configuré' if os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE) else '❌ Manquant'}")
+        print(f"   - Service Ready: {'✅' if google_drive_service else '❌'}")
+        if not os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE):
+            print(f"   ⚠️  Créez un fichier service-account.json pour activer Google Drive")
+            print(f"   ⚠️  Ou définissez GOOGLE_SERVICE_ACCOUNT_FILE")
+    
+    print(f"🎨 Améliorations v2.7:")
+    print(f"   - Support complet Google Drive")
+    print(f"   - Téléchargement depuis liens de partage")
+    print(f"   - Conversion directe Google Drive vers PDF/Image")
+    print(f"   - Détection automatique des URLs Google Drive")
+    print(f"   - Toutes les fonctionnalités v2.6 conservées")
     
     app.run(host='0.0.0.0', port=port, debug=False)
