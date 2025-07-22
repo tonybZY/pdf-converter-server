@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 from flask import Flask, request, jsonify, Response, send_file
 from flask_cors import CORS
 import os
@@ -14,7 +17,7 @@ CORS(app)
 # Configuration
 PRIMARY_API_KEY = os.environ.get('PRIMARY_API_KEY', 'pk_live_mega_converter_primary_key_2024_super_secure_token_xyz789')
 SECONDARY_API_KEY = os.environ.get('SECONDARY_API_KEY', 'sk_live_mega_converter_secondary_key_2024_ultra_secure_token_abc456')
-MAX_FILE_SIZE = int(os.environ.get('MAX_FILE_SIZE', 100 * 1024 * 1024))  # 100MB par défaut
+MAX_FILE_SIZE = int(os.environ.get('MAX_FILE_SIZE', 180 * 1024 * 1024))  # 180MB par défaut
 FILE_EXPIRY_HOURS = int(os.environ.get('FILE_EXPIRY_HOURS', 24))
 BASE_URL = os.environ.get('BASE_URL', 'https://pdf-converter-server-production.up.railway.app')
 
@@ -52,7 +55,7 @@ def cleanup_old_files():
     
     for key in expired_keys:
         del TEMP_STORAGE[key]
-        print(f"🗑️ Fichier expiré supprimé: {key}")
+        print(f"[DELETE] Fichier expire supprime: {key}")
 
 def require_api_key(f):
     """Vérification des clés API"""
@@ -109,24 +112,24 @@ def home():
     cleanup_old_files()
     
     return jsonify({
-        "service": "📁 File Storage API - Stockage de fichiers avec URLs",
+        "service": "[FILE] Storage API - Stockage de fichiers avec URLs",
         "version": "1.0",
-        "status": "✅ Opérationnel",
-        "description": "Upload n'importe quel fichier et obtenez une URL de téléchargement",
+        "status": "[OK] Operationnel",
+        "description": "Upload n'importe quel fichier et obtenez une URL de telechargement",
         "features": {
-            "file_storage": "✅ Stockage de tous types de fichiers",
-            "temporary_urls": "✅ URLs temporaires sécurisées",
-            "all_formats": "✅ Images, PDF, vidéos, documents, etc.",
-            "dual_api_keys": "✅ Primary & Secondary keys",
-            "auto_cleanup": f"✅ Suppression après {FILE_EXPIRY_HOURS}h",
-            "max_file_size": f"✅ Jusqu'à {MAX_FILE_SIZE / (1024*1024)}MB"
+            "file_storage": "[OK] Stockage de tous types de fichiers",
+            "temporary_urls": "[OK] URLs temporaires securisees",
+            "all_formats": "[OK] Images, PDF, videos, documents, etc.",
+            "dual_api_keys": "[OK] Primary & Secondary keys",
+            "auto_cleanup": f"[OK] Suppression apres {FILE_EXPIRY_HOURS}h",
+            "max_file_size": f"[OK] Jusqu'a {MAX_FILE_SIZE / (1024*1024)}MB"
         },
         "endpoints": {
             "POST /upload": "Upload un fichier",
             "POST /convert": "Upload un fichier (alias)",
-            "GET /download/{id}": "Télécharger un fichier",
+            "GET /download/{id}": "Telecharger un fichier",
             "GET /info/{id}": "Infos sur un fichier",
-            "GET /health": "Vérification santé",
+            "GET /health": "Verification sante",
             "GET /status": "Statut du service"
         },
         "usage": {
@@ -171,7 +174,7 @@ def upload_file():
         # Vérifier l'extension (optionnel - on peut accepter tout)
         if file_ext and file_ext not in ALLOWED_EXTENSIONS:
             # On accepte quand même mais on prévient
-            print(f"⚠️ Extension non standard: {file_ext}")
+            print(f"[WARNING] Extension non standard: {file_ext}")
         
         # Stocker le fichier
         download_url = store_file(file_content, filename, file.content_type)
@@ -191,13 +194,13 @@ def upload_file():
             "expires_at": (datetime.now() + timedelta(hours=FILE_EXPIRY_HOURS)).isoformat(),
             "expiry_hours": FILE_EXPIRY_HOURS,
             "api_key_used": request.api_key_type,
-            "message": f"✅ Fichier uploadé! URL valide pendant {FILE_EXPIRY_HOURS}h"
+            "message": f"[OK] Fichier uploade! URL valide pendant {FILE_EXPIRY_HOURS}h"
         }
         
         return jsonify(file_info)
         
     except Exception as e:
-        print(f"❌ Erreur upload: {e}")
+        print(f"[ERROR] Erreur upload: {e}")
         return jsonify({"error": f"Erreur: {str(e)}"}), 500
 
 @app.route('/download/<file_id>')
@@ -309,21 +312,21 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     
     print("="*60)
-    print("📁 FILE STORAGE SERVER - Serveur de stockage de fichiers")
+    print("[FILE] STORAGE SERVER - Serveur de stockage de fichiers")
     print("="*60)
-    print(f"✅ Port: {port}")
-    print(f"✅ Taille max: {MAX_FILE_SIZE / (1024*1024)} MB")
-    print(f"✅ Expiration: {FILE_EXPIRY_HOURS} heures")
-    print(f"✅ Formats: {len(ALLOWED_EXTENSIONS)}+ formats acceptés")
-    print(f"✅ URL de base: {BASE_URL}")
+    print(f"[OK] Port: {port}")
+    print(f"[OK] Taille max: {MAX_FILE_SIZE / (1024*1024)} MB")
+    print(f"[OK] Expiration: {FILE_EXPIRY_HOURS} heures")
+    print(f"[OK] Formats: {len(ALLOWED_EXTENSIONS)}+ formats acceptes")
+    print(f"[OK] URL de base: {BASE_URL}")
     print("="*60)
-    print("🔑 CLÉS API:")
+    print("[KEY] CLES API:")
     print(f"   Primary: {PRIMARY_API_KEY[:30]}...{PRIMARY_API_KEY[-3:]}")
     print(f"   Secondary: {SECONDARY_API_KEY[:30]}...{SECONDARY_API_KEY[-3:]}")
     print("="*60)
-    print("📡 Endpoints:")
+    print("[INFO] Endpoints:")
     print("   POST /upload - Upload un fichier")
-    print("   GET  /download/{id} - Télécharger")
+    print("   GET  /download/{id} - Telecharger")
     print("   GET  /info/{id} - Infos fichier")
     print("   GET  /status - Voir tous les fichiers")
     print("="*60)
