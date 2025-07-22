@@ -1,23 +1,12 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import os
-os.environ['PYTHONIOENCODING'] = 'utf-8'
-
 from flask import Flask, request, jsonify, Response, send_file
 from flask_cors import CORS
+import os
 import uuid
 from datetime import datetime, timedelta
 import io
 import base64
 from functools import wraps
 import mimetypes
-import sys
-
-# Forcer UTF-8 partout
-if sys.version_info[0] >= 3:
-    import locale
-    locale.setlocale(locale.LC_ALL, 'C.UTF-8')
 
 app = Flask(__name__)
 CORS(app)
@@ -25,7 +14,7 @@ CORS(app)
 # Configuration
 PRIMARY_API_KEY = os.environ.get('PRIMARY_API_KEY', 'pk_live_mega_converter_primary_key_2024_super_secure_token_xyz789')
 SECONDARY_API_KEY = os.environ.get('SECONDARY_API_KEY', 'sk_live_mega_converter_secondary_key_2024_ultra_secure_token_abc456')
-MAX_FILE_SIZE = int(os.environ.get('MAX_FILE_SIZE', 180 * 1024 * 1024))  # 180MB par défaut
+MAX_FILE_SIZE = int(os.environ.get('MAX_FILE_SIZE', 100 * 1024 * 1024))  # 100MB par défaut
 FILE_EXPIRY_HOURS = int(os.environ.get('FILE_EXPIRY_HOURS', 24))
 BASE_URL = os.environ.get('BASE_URL', 'https://pdf-converter-server-production.up.railway.app')
 
@@ -34,18 +23,26 @@ TEMP_STORAGE = {}
 
 # Tous les formats acceptés
 ALLOWED_EXTENSIONS = {
+    # Images
     'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'svg', 'tiff', 'tif',
+    # Documents
     'pdf', 'txt', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp',
+    # Web
     'html', 'htm', 'css', 'js', 'json', 'xml',
+    # Fichiers
     'csv', 'md', 'rtf', 'tex',
+    # Archives
     'zip', 'rar', '7z', 'tar', 'gz',
+    # Vidéos
     'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'mkv', 'm4v',
+    # Audio
     'mp3', 'wav', 'flac', 'aac', 'ogg', 'wma', 'm4a',
+    # Autres
     'exe', 'dmg', 'apk', 'deb', 'rpm'
 }
 
 def cleanup_old_files():
-    """Nettoie les fichiers expires"""
+    """Nettoie les fichiers expirés"""
     current_time = datetime.now()
     expired_keys = []
     
@@ -55,10 +52,10 @@ def cleanup_old_files():
     
     for key in expired_keys:
         del TEMP_STORAGE[key]
-        print(f"[DELETE] Fichier expire supprime: {key}")
+        print(f"🗑️ Fichier expiré supprimé: {key}")
 
 def require_api_key(f):
-    """Verification des cles API"""
+    """Vérification des clés API"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         api_key = request.headers.get('X-API-Key')
@@ -69,8 +66,8 @@ def require_api_key(f):
         
         if api_key not in [PRIMARY_API_KEY, SECONDARY_API_KEY]:
             return jsonify({
-                "error": "Cle API invalide ou manquante",
-                "message": "Utilisez une des deux cles API valides"
+                "error": "Clé API invalide ou manquante",
+                "message": "Utilisez une des deux clés API valides"
             }), 401
         
         request.api_key_type = "primary" if api_key == PRIMARY_API_KEY else "secondary"
@@ -84,6 +81,7 @@ def store_file(content, filename, content_type=None):
     file_id = str(uuid.uuid4())
     expiry = datetime.now() + timedelta(hours=FILE_EXPIRY_HOURS)
     
+    # Détecter le type MIME
     if not content_type:
         content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
     
@@ -103,37 +101,43 @@ def get_file_extension(filename):
         return None
     return filename.rsplit('.', 1)[1].lower()
 
+# ===== ROUTES =====
+
 @app.route('/')
 def home():
     """Page d'accueil"""
     cleanup_old_files()
     
     return jsonify({
-        "service": "File Storage API - Stockage de fichiers avec URLs",
+        "service": "📁 File Storage API - Stockage de fichiers avec URLs",
         "version": "1.0",
-        "status": "Operationnel",
-        "description": "Upload n'importe quel fichier et obtenez une URL de telechargement",
+        "status": "✅ Opérationnel",
+        "description": "Upload n'importe quel fichier et obtenez une URL de téléchargement",
         "features": {
-            "file_storage": "Stockage de tous types de fichiers",
-            "temporary_urls": "URLs temporaires securisees",
-            "all_formats": "Images, PDF, videos, documents, etc.",
-            "dual_api_keys": "Primary & Secondary keys",
-            "auto_cleanup": f"Suppression apres {FILE_EXPIRY_HOURS}h",
-            "max_file_size": f"Jusqu'a {MAX_FILE_SIZE / (1024*1024)}MB"
+            "file_storage": "✅ Stockage de tous types de fichiers",
+            "temporary_urls": "✅ URLs temporaires sécurisées",
+            "all_formats": "✅ Images, PDF, vidéos, documents, etc.",
+            "dual_api_keys": "✅ Primary & Secondary keys",
+            "auto_cleanup": f"✅ Suppression après {FILE_EXPIRY_HOURS}h",
+            "max_file_size": f"✅ Jusqu'à {MAX_FILE_SIZE / (1024*1024)}MB"
         },
         "endpoints": {
             "POST /upload": "Upload un fichier",
             "POST /convert": "Upload un fichier (alias)",
-            "GET /download/{id}": "Telecharger un fichier",
+            "GET /download/{id}": "Télécharger un fichier",
             "GET /info/{id}": "Infos sur un fichier",
-            "GET /health": "Verification sante",
+            "GET /health": "Vérification santé",
             "GET /status": "Statut du service"
+        },
+        "usage": {
+            "curl": "curl -X POST /upload -H 'X-API-Key: YOUR_KEY' -F 'file=@image.jpg'",
+            "response": "{'success': true, 'download_url': '...', 'expires_at': '...'}"
         }
     })
 
 @app.route('/health')
 def health():
-    """Verification sante"""
+    """Vérification santé"""
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
@@ -141,7 +145,7 @@ def health():
     })
 
 @app.route('/upload', methods=['POST'])
-@app.route('/convert', methods=['POST'])
+@app.route('/convert', methods=['POST'])  # Alias pour compatibilité
 @require_api_key
 def upload_file():
     """Upload n'importe quel fichier et retourne une URL"""
@@ -153,6 +157,7 @@ def upload_file():
         if file.filename == '':
             return jsonify({"error": "Nom de fichier vide"}), 400
         
+        # Lire le fichier
         file_content = file.read()
         if len(file_content) > MAX_FILE_SIZE:
             return jsonify({
@@ -163,16 +168,20 @@ def upload_file():
         filename = file.filename
         file_ext = get_file_extension(filename)
         
+        # Vérifier l'extension (optionnel - on peut accepter tout)
         if file_ext and file_ext not in ALLOWED_EXTENSIONS:
-            print(f"[WARNING] Extension non standard: {file_ext}")
+            # On accepte quand même mais on prévient
+            print(f"⚠️ Extension non standard: {file_ext}")
         
+        # Stocker le fichier
         download_url = store_file(file_content, filename, file.content_type)
         
+        # Infos sur le fichier
         file_info = {
             "success": True,
             "filename": filename,
             "download_url": download_url,
-            "direct_url": download_url,
+            "direct_url": download_url,  # Même URL
             "file_id": download_url.split('/')[-1],
             "format": file_ext or "unknown",
             "size_bytes": len(file_content),
@@ -182,53 +191,52 @@ def upload_file():
             "expires_at": (datetime.now() + timedelta(hours=FILE_EXPIRY_HOURS)).isoformat(),
             "expiry_hours": FILE_EXPIRY_HOURS,
             "api_key_used": request.api_key_type,
-            "message": f"Fichier uploade! URL valide pendant {FILE_EXPIRY_HOURS}h"
+            "message": f"✅ Fichier uploadé! URL valide pendant {FILE_EXPIRY_HOURS}h"
         }
         
         return jsonify(file_info)
         
     except Exception as e:
-        print(f"[ERROR] Erreur upload: {str(e)}")
+        print(f"❌ Erreur upload: {e}")
         return jsonify({"error": f"Erreur: {str(e)}"}), 500
 
 @app.route('/download/<file_id>')
 def download(file_id):
-    """Telecharge un fichier stocke"""
-    try:
-        cleanup_old_files()
-        
-        if file_id not in TEMP_STORAGE:
-            return jsonify({"error": "Fichier non trouve ou expire"}), 404
-        
-        file_data = TEMP_STORAGE[file_id]
-        
-        if datetime.now() > file_data['expiry']:
-            del TEMP_STORAGE[file_id]
-            return jsonify({"error": "Fichier expire"}), 404
-        
-        content = base64.b64decode(file_data['content'])
-        
-        response = Response(
-            content,
-            mimetype=file_data['content_type'],
-            headers={
-                'Content-Disposition': f'attachment; filename="{file_data["filename"]}"',
-                'Content-Length': str(len(content)),
-                'Content-Type': file_data['content_type'],
-                'Cache-Control': 'public, max-age=3600'
-            }
-        )
-        
-        return response
-    except Exception as e:
-        print(f"[ERROR] Erreur download: {str(e)}")
-        return jsonify({"error": "Erreur serveur interne"}), 500
+    """Télécharge un fichier stocké"""
+    cleanup_old_files()
+    
+    if file_id not in TEMP_STORAGE:
+        return jsonify({"error": "Fichier non trouvé ou expiré"}), 404
+    
+    file_data = TEMP_STORAGE[file_id]
+    
+    # Vérifier l'expiration
+    if datetime.now() > file_data['expiry']:
+        del TEMP_STORAGE[file_id]
+        return jsonify({"error": "Fichier expiré"}), 404
+    
+    # Décoder le contenu
+    content = base64.b64decode(file_data['content'])
+    
+    # Créer la réponse avec le bon type MIME
+    response = Response(
+        content,
+        mimetype=file_data['content_type'],
+        headers={
+            'Content-Disposition': f'attachment; filename="{file_data["filename"]}"',
+            'Content-Length': str(len(content)),
+            'Content-Type': file_data['content_type'],
+            'Cache-Control': 'public, max-age=3600'
+        }
+    )
+    
+    return response
 
 @app.route('/info/<file_id>')
 def file_info(file_id):
     """Retourne les infos sur un fichier"""
     if file_id not in TEMP_STORAGE:
-        return jsonify({"error": "Fichier non trouve"}), 404
+        return jsonify({"error": "Fichier non trouvé"}), 404
     
     file_data = TEMP_STORAGE[file_id]
     time_left = file_data['expiry'] - datetime.now()
@@ -268,7 +276,7 @@ def status():
         "storage": {
             "files_count": len(TEMP_STORAGE),
             "total_size_mb": round(total_size / (1024 * 1024), 2),
-            "files": files_list[:20]
+            "files": files_list[:20]  # Max 20 fichiers
         },
         "limits": {
             "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024),
@@ -278,18 +286,20 @@ def status():
         "timestamp": datetime.now().isoformat()
     })
 
+# Routes pour compatibilité
 @app.route('/qrcode', methods=['POST'])
 @require_api_key
 def qrcode_compat():
-    """Compatibilite avec l'ancienne API"""
+    """Compatibilité avec l'ancienne API"""
     return jsonify({
-        "error": "Cette fonctionnalite n'est plus disponible",
+        "error": "Cette fonctionnalité n'est plus disponible",
         "message": "Utilisez /upload pour stocker n'importe quel fichier"
     }), 501
 
+# Gestion des erreurs
 @app.errorhandler(404)
 def not_found(e):
-    return jsonify({"error": "Endpoint non trouve"}), 404
+    return jsonify({"error": "Endpoint non trouvé"}), 404
 
 @app.errorhandler(500)
 def server_error(e):
@@ -299,21 +309,21 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     
     print("="*60)
-    print("FILE STORAGE SERVER - Serveur de stockage de fichiers")
+    print("📁 FILE STORAGE SERVER - Serveur de stockage de fichiers")
     print("="*60)
-    print(f"Port: {port}")
-    print(f"Taille max: {MAX_FILE_SIZE / (1024*1024)} MB")
-    print(f"Expiration: {FILE_EXPIRY_HOURS} heures")
-    print(f"Formats: {len(ALLOWED_EXTENSIONS)}+ formats acceptes")
-    print(f"URL de base: {BASE_URL}")
+    print(f"✅ Port: {port}")
+    print(f"✅ Taille max: {MAX_FILE_SIZE / (1024*1024)} MB")
+    print(f"✅ Expiration: {FILE_EXPIRY_HOURS} heures")
+    print(f"✅ Formats: {len(ALLOWED_EXTENSIONS)}+ formats acceptés")
+    print(f"✅ URL de base: {BASE_URL}")
     print("="*60)
-    print("CLES API:")
-    print(f"   Primary: {PRIMARY_API_KEY[:30]}...")
-    print(f"   Secondary: {SECONDARY_API_KEY[:30]}...")
+    print("🔑 CLÉS API:")
+    print(f"   Primary: {PRIMARY_API_KEY[:30]}...{PRIMARY_API_KEY[-3:]}")
+    print(f"   Secondary: {SECONDARY_API_KEY[:30]}...{SECONDARY_API_KEY[-3:]}")
     print("="*60)
-    print("Endpoints:")
+    print("📡 Endpoints:")
     print("   POST /upload - Upload un fichier")
-    print("   GET  /download/{id} - Telecharger")
+    print("   GET  /download/{id} - Télécharger")
     print("   GET  /info/{id} - Infos fichier")
     print("   GET  /status - Voir tous les fichiers")
     print("="*60)
