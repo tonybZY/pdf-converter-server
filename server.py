@@ -10,6 +10,8 @@ import io
 import base64
 from functools import wraps
 import mimetypes
+import unicodedata
+import re
 
 app = Flask(__name__)
 CORS(app)
@@ -43,6 +45,30 @@ ALLOWED_EXTENSIONS = {
     # Autres
     'exe', 'dmg', 'apk', 'deb', 'rpm'
 }
+
+def sanitize_filename(filename):
+    """Nettoie le nom de fichier pour éviter les problèmes"""
+    # Séparer nom et extension
+    if '.' in filename:
+        name, ext = filename.rsplit('.', 1)
+    else:
+        name, ext = filename, ''
+    
+    # Supprimer les accents
+    name = unicodedata.normalize('NFKD', name)
+    name = ''.join([c for c in name if not unicodedata.combining(c)])
+    
+    # Remplacer les caractères spéciaux par des underscores
+    name = re.sub(r'[^\w\s-]', '', name)
+    name = re.sub(r'[-\s]+', '_', name)
+    
+    # Limiter la longueur
+    name = name[:50]
+    
+    # Reconstruire le nom complet
+    if ext:
+        return f"{name}.{ext}"
+    return name
 
 def cleanup_old_files():
     """Nettoie les fichiers expirés"""
@@ -84,13 +110,19 @@ def store_file(content, filename, content_type=None):
     file_id = str(uuid.uuid4())
     expiry = datetime.now() + timedelta(hours=FILE_EXPIRY_HOURS)
     
+    # NETTOYER LE NOM DU FICHIER
+    clean_filename = sanitize_filename(filename)
+    print(f"[INFO] Nom original: {filename}")
+    print(f"[INFO] Nom nettoye: {clean_filename}")
+    
     # Détecter le type MIME
     if not content_type:
-        content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+        content_type = mimetypes.guess_type(clean_filename)[0] or 'application/octet-stream'
     
     TEMP_STORAGE[file_id] = {
         'content': base64.b64encode(content).decode('utf-8') if isinstance(content, bytes) else content,
-        'filename': filename,
+        'filename': clean_filename,  # Utiliser le nom nettoyé
+        'original_filename': filename,  # Garder le nom original pour info
         'content_type': content_type,
         'expiry': expiry,
         'created': datetime.now(),
@@ -182,7 +214,8 @@ def upload_file():
         # Infos sur le fichier
         file_info = {
             "success": True,
-            "filename": filename,
+            "filename": sanitize_filename(filename),  # Retourner le nom nettoyé
+            "original_filename": filename,  # Ajouter le nom original
             "download_url": download_url,
             "direct_url": download_url,  # Même URL
             "file_id": download_url.split('/')[-1],
@@ -246,6 +279,7 @@ def file_info(file_id):
     
     return jsonify({
         "filename": file_data['filename'],
+        "original_filename": file_data.get('original_filename', file_data['filename']),
         "content_type": file_data['content_type'],
         "size_bytes": file_data['size'],
         "size_mb": round(file_data['size'] / (1024 * 1024), 2),
@@ -268,6 +302,7 @@ def status():
         files_list.append({
             "id": file_id,
             "filename": data['filename'],
+            "original_filename": data.get('original_filename', data['filename']),
             "size_mb": round(data['size'] / (1024 * 1024), 2),
             "type": data['content_type'],
             "expires_in_hours": max(0, time_left.total_seconds() / 3600)
