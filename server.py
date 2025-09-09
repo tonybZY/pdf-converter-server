@@ -12,6 +12,7 @@ from functools import wraps
 import mimetypes
 import unicodedata
 import re
+import requests  # AJOUT pour télécharger depuis URL
 
 app = Flask(__name__)
 CORS(app)
@@ -145,19 +146,21 @@ def home():
     
     return jsonify({
         "service": "[FILE] Storage API - Stockage de fichiers avec URLs",
-        "version": "1.0",
+        "version": "1.1",  # Version mise à jour
         "status": "[OK] Operationnel",
         "description": "Upload n'importe quel fichier et obtenez une URL de telechargement",
         "features": {
             "file_storage": "[OK] Stockage de tous types de fichiers",
             "temporary_urls": "[OK] URLs temporaires securisees",
             "all_formats": "[OK] Images, PDF, videos, documents, etc.",
+            "url_download": "[OK] Telechargement depuis URL externe",  # NOUVELLE FEATURE
             "dual_api_keys": "[OK] Primary & Secondary keys",
             "auto_cleanup": f"[OK] Suppression apres {FILE_EXPIRY_HOURS}h",
             "max_file_size": f"[OK] Jusqu'a {MAX_FILE_SIZE / (1024*1024)}MB"
         },
         "endpoints": {
             "POST /upload": "Upload un fichier",
+            "POST /upload-from-url": "Telecharger depuis URL externe",  # NOUVEAU
             "POST /convert": "Upload un fichier (alias)",
             "GET /download/{id}": "Telecharger un fichier",
             "GET /info/{id}": "Infos sur un fichier",
@@ -166,6 +169,7 @@ def home():
         },
         "usage": {
             "curl": "curl -X POST /upload -H 'X-API-Key: YOUR_KEY' -F 'file=@image.jpg'",
+            "url": "curl -X POST /upload-from-url -H 'X-API-Key: YOUR_KEY' -d '{\"url\": \"https://example.com/file.pdf\"}'",
             "response": "{'success': true, 'download_url': '...', 'expires_at': '...'}"
         }
     })
@@ -235,6 +239,109 @@ def upload_file():
     except Exception as e:
         print(f"[ERROR] Erreur upload: {e}")
         return jsonify({"error": f"Erreur: {str(e)}"}), 500
+
+# NOUVELLE ROUTE - Télécharger depuis URL externe
+@app.route('/upload-from-url', methods=['POST'])
+@require_api_key
+def upload_from_url():
+    """Télécharge un fichier depuis une URL externe et le stocke"""
+    try:
+        # Vérifier le Content-Type
+        content_type = request.headers.get('Content-Type', '')
+        if 'application/json' in content_type:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
+        
+        if not data or 'url' not in data:
+            return jsonify({"error": "URL manquante", "message": "Fournissez une URL dans le champ 'url'"}), 400
+        
+        file_url = data['url']
+        
+        # Validation basique de l'URL
+        if not file_url.startswith(('http://', 'https://')):
+            return jsonify({"error": "URL invalide", "message": "L'URL doit commencer par http:// ou https://"}), 400
+        
+        print(f"[INFO] Telechargement depuis URL: {file_url}")
+        
+        # Télécharger le fichier depuis l'URL
+        try:
+            # Headers pour simuler un navigateur
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(file_url, headers=headers, timeout=30, stream=True)
+            response.raise_for_status()
+        except requests.exceptions.Timeout:
+            return jsonify({"error": "Timeout", "message": "Le téléchargement a pris trop de temps"}), 504
+        except requests.exceptions.ConnectionError:
+            return jsonify({"error": "Erreur de connexion", "message": "Impossible de se connecter à l'URL"}), 503
+        except requests.exceptions.HTTPError as e:
+            return jsonify({"error": f"Erreur HTTP {response.status_code}", "message": str(e)}), 502
+        except Exception as e:
+            return jsonify({"error": "Erreur de téléchargement", "message": str(e)}), 500
+        
+        # Récupérer le nom du fichier
+        filename = 'download'  # Nom par défaut
+        
+        # Essayer d'extraire le nom depuis Content-Disposition
+        if 'content-disposition' in response.headers:
+            import re
+            match = re.search(r'filename[^;=\n]*=([\'\"]?)([^\'\"\n]*)\1', response.headers['content-disposition'])
+            if match:
+                filename = match.group(2)
+        
+        # Sinon, utiliser l'URL
+        if filename == 'download':
+            url_path = file_url.split('?')[0]  # Enlever les query params
+            url_filename = url_path.split('/')[-1]
+            if url_filename and '.' in url_filename:
+                filename = url_filename
+        
+        # Permettre de spécifier un nom custom
+        if 'filename' in data and data['filename']:
+            filename = data['filename']
+        
+        # Lire le contenu
+        content = response.content
+        if len(content) > MAX_FILE_SIZE:
+            return jsonify({
+                "error": "Fichier trop volumineux",
+                "max_size_mb": MAX_FILE_SIZE / (1024 * 1024),
+                "file_size_mb": round(len(content) / (1024 * 1024), 2)
+            }), 413
+        
+        # Déterminer le content-type
+        content_type = response.headers.get('content-type', 'application/octet-stream')
+        
+        # Stocker le fichier
+        download_url = store_file(content, filename, content_type)
+        
+        # Retourner les infos
+        file_ext = get_file_extension(filename)
+        
+        return jsonify({
+            "success": True,
+            "source_url": file_url,
+            "filename": sanitize_filename(filename),
+            "original_filename": filename,
+            "download_url": download_url,
+            "direct_url": download_url,
+            "file_id": download_url.split('/')[-1],
+            "format": file_ext or "unknown",
+            "size_bytes": len(content),
+            "size_mb": round(len(content) / (1024 * 1024), 2),
+            "content_type": content_type,
+            "uploaded_at": datetime.now().isoformat(),
+            "expires_at": (datetime.now() + timedelta(hours=FILE_EXPIRY_HOURS)).isoformat(),
+            "expiry_hours": FILE_EXPIRY_HOURS,
+            "api_key_used": request.api_key_type,
+            "message": f"[OK] Fichier téléchargé depuis URL! Valide {FILE_EXPIRY_HOURS}h"
+        })
+        
+    except Exception as e:
+        print(f"[ERROR] Erreur upload-from-url: {e}")
+        return jsonify({"error": f"Erreur serveur: {str(e)}"}), 500
 
 @app.route('/download/<file_id>')
 def download(file_id):
@@ -310,7 +417,7 @@ def status():
     
     return jsonify({
         "status": "operational",
-        "version": "1.0",
+        "version": "1.1",  # Version mise à jour
         "storage": {
             "files_count": len(TEMP_STORAGE),
             "total_size_mb": round(total_size / (1024 * 1024), 2),
@@ -361,6 +468,7 @@ if __name__ == '__main__':
     print("="*60)
     print("[INFO] Endpoints:")
     print("   POST /upload - Upload un fichier")
+    print("   POST /upload-from-url - Telecharger depuis URL")  # NOUVEAU
     print("   GET  /download/{id} - Telecharger")
     print("   GET  /info/{id} - Infos fichier")
     print("   GET  /status - Voir tous les fichiers")
