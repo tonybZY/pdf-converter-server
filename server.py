@@ -146,21 +146,22 @@ def home():
     
     return jsonify({
         "service": "[FILE] Storage API - Stockage de fichiers avec URLs",
-        "version": "1.1",  # Version mise à jour
+        "version": "1.2",  # Version mise à jour avec return_binary
         "status": "[OK] Operationnel",
         "description": "Upload n'importe quel fichier et obtenez une URL de telechargement",
         "features": {
             "file_storage": "[OK] Stockage de tous types de fichiers",
             "temporary_urls": "[OK] URLs temporaires securisees",
             "all_formats": "[OK] Images, PDF, videos, documents, etc.",
-            "url_download": "[OK] Telechargement depuis URL externe",  # NOUVELLE FEATURE
+            "url_download": "[OK] Telechargement depuis URL externe",
+            "return_binary": "[OK] Option retour binaire direct",  # NOUVELLE FEATURE
             "dual_api_keys": "[OK] Primary & Secondary keys",
             "auto_cleanup": f"[OK] Suppression apres {FILE_EXPIRY_HOURS}h",
             "max_file_size": f"[OK] Jusqu'a {MAX_FILE_SIZE / (1024*1024)}MB"
         },
         "endpoints": {
             "POST /upload": "Upload un fichier",
-            "POST /upload-from-url": "Telecharger depuis URL externe",  # NOUVEAU
+            "POST /upload-from-url": "Telecharger depuis URL externe (avec option return_binary)",
             "POST /convert": "Upload un fichier (alias)",
             "GET /download/{id}": "Telecharger un fichier",
             "GET /info/{id}": "Infos sur un fichier",
@@ -170,6 +171,7 @@ def home():
         "usage": {
             "curl": "curl -X POST /upload -H 'X-API-Key: YOUR_KEY' -F 'file=@image.jpg'",
             "url": "curl -X POST /upload-from-url -H 'X-API-Key: YOUR_KEY' -d '{\"url\": \"https://example.com/file.pdf\"}'",
+            "url_binary": "curl -X POST /upload-from-url -H 'X-API-Key: YOUR_KEY' -d '{\"url\": \"...\", \"return_binary\": true}'",
             "response": "{'success': true, 'download_url': '...', 'expires_at': '...'}"
         }
     })
@@ -240,11 +242,11 @@ def upload_file():
         print(f"[ERROR] Erreur upload: {e}")
         return jsonify({"error": f"Erreur: {str(e)}"}), 500
 
-# NOUVELLE ROUTE - Télécharger depuis URL externe
+# NOUVELLE ROUTE - Télécharger depuis URL externe avec option return_binary
 @app.route('/upload-from-url', methods=['POST'])
 @require_api_key
 def upload_from_url():
-    """Télécharge un fichier depuis une URL externe et le stocke"""
+    """Télécharge un fichier depuis une URL externe et le stocke ou le retourne directement"""
     try:
         # Vérifier le Content-Type
         content_type = request.headers.get('Content-Type', '')
@@ -258,11 +260,17 @@ def upload_from_url():
         
         file_url = data['url']
         
+        # NOUVEAU : Option pour retourner directement le binaire
+        return_binary = data.get('return_binary', False)
+        if isinstance(return_binary, str):
+            return_binary = return_binary.lower() in ['true', '1', 'yes']
+        
         # Validation basique de l'URL
         if not file_url.startswith(('http://', 'https://')):
             return jsonify({"error": "URL invalide", "message": "L'URL doit commencer par http:// ou https://"}), 400
         
         print(f"[INFO] Telechargement depuis URL: {file_url}")
+        print(f"[INFO] Return binary: {return_binary}")
         
         # Télécharger le fichier depuis l'URL
         try:
@@ -314,7 +322,22 @@ def upload_from_url():
         # Déterminer le content-type
         content_type = response.headers.get('content-type', 'application/octet-stream')
         
-        # Stocker le fichier
+        # NOUVEAU : Si return_binary est True, retourner directement le fichier
+        if return_binary:
+            print(f"[INFO] Retour direct du fichier binaire: {filename}")
+            return Response(
+                content,
+                mimetype=content_type,
+                headers={
+                    'Content-Disposition': f'attachment; filename="{sanitize_filename(filename)}"',
+                    'Content-Length': str(len(content)),
+                    'Content-Type': content_type,
+                    'X-Original-URL': file_url,
+                    'X-File-Size': str(len(content))
+                }
+            )
+        
+        # Sinon, stocker le fichier et retourner l'URL comme avant
         download_url = store_file(content, filename, content_type)
         
         # Retourner les infos
@@ -417,7 +440,7 @@ def status():
     
     return jsonify({
         "status": "operational",
-        "version": "1.1",  # Version mise à jour
+        "version": "1.2",  # Version mise à jour avec return_binary
         "storage": {
             "files_count": len(TEMP_STORAGE),
             "total_size_mb": round(total_size / (1024 * 1024), 2),
@@ -461,6 +484,7 @@ if __name__ == '__main__':
     print(f"[OK] Expiration: {FILE_EXPIRY_HOURS} heures")
     print(f"[OK] Formats: {len(ALLOWED_EXTENSIONS)}+ formats acceptes")
     print(f"[OK] URL de base: {BASE_URL}")
+    print(f"[OK] Return Binary: Active sur /upload-from-url")
     print("="*60)
     print("[KEY] CLES API:")
     print(f"   Primary: {PRIMARY_API_KEY[:30]}...{PRIMARY_API_KEY[-3:]}")
@@ -468,7 +492,7 @@ if __name__ == '__main__':
     print("="*60)
     print("[INFO] Endpoints:")
     print("   POST /upload - Upload un fichier")
-    print("   POST /upload-from-url - Telecharger depuis URL")  # NOUVEAU
+    print("   POST /upload-from-url - Telecharger depuis URL (avec return_binary)")
     print("   GET  /download/{id} - Telecharger")
     print("   GET  /info/{id} - Infos fichier")
     print("   GET  /status - Voir tous les fichiers")
