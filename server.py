@@ -27,7 +27,7 @@ SECONDARY_API_KEY = os.environ.get('SECONDARY_API_KEY', 'sk_live_mega_converter_
 MAX_FILE_SIZE = int(os.environ.get('MAX_FILE_SIZE', 500 * 1024 * 1024))  # 500MB par défaut
 MAX_IMAGE_SIZE = int(os.environ.get('MAX_IMAGE_SIZE', 1000 * 1024 * 1024))  # 1GB pour images
 AUTO_COMPRESS_IMAGES = os.environ.get('AUTO_COMPRESS_IMAGES', 'true').lower() == 'true'
-MAX_IMAGE_DIMENSION = int(os.environ.get('MAX_IMAGE_DIMENSION', 50000))  # Max pixels par côté
+MAX_IMAGE_DIMENSION = int(os.environ.get('MAX_IMAGE_DIMENSION', 80000))  # 80000px max par côté
 
 FILE_EXPIRY_HOURS = int(os.environ.get('FILE_EXPIRY_HOURS', 24))
 BASE_URL = os.environ.get('BASE_URL', 'https://pdf-converter-server-production.up.railway.app')
